@@ -57,11 +57,11 @@ hl.bind("SUPER + A", hl.dsp.exec_cmd("tidings ctl toggle"))
 
 -- glass: blur behind the panel and the toasts
 hl.layer_rule({ name = "tidings-panel", match = { namespace = "^tidings-panel$" },
-                blur = true, ignore_alpha = 0.35, xray = false })
+                blur = true, ignore_alpha = 0.5, xray = false })
 -- toasts are lighter glass (alpha >= 0.46) with a soft shadow (alpha < 0.3):
 -- the threshold sits between, so the glass is blurred and the shadow is not
 hl.layer_rule({ name = "tidings-toast", match = { namespace = "^tidings-toast$" },
-                blur = true, ignore_alpha = 0.25, xray = false })
+                blur = true, ignore_alpha = 0.4, xray = false })
 ```
 
 ### Theme

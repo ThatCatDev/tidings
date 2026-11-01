@@ -58,12 +58,12 @@ Dependency direction: `tidings -> {core, gesture, ui}`, `gesture -> core`, `ui -
 - Compact pill: 58 logical px tall (radius 29), round 40 px icon, a bold one-line summary over one line of body, then the time and a round 28 px expand (⌄) button (with a dot when the notification has actions). Hover tints the glass and shows a "×" over the icon.
 - Expanded: the full card (app name + time, summary, body up to 6 lines, action buttons) with the icon level with the app-name row and a collapse (⌃) button in the top-right corner. The stack re-flows when a toast grows or shrinks. The UI sends `SetToastExpanded`.
 - Expiry: low 4 s, normal 6 s, critical never. A positive client timeout wins; 0 means never. Hover or expansion pauses expiry; it resumes with the remaining time once the toast is neither. A replaced notification keeps its expanded state. Expired toasts stay in the panel history (unless `transient`).
-- Glass: more transparent than the panel (alpha 0.32 at rest), with a 1 px light rim and a soft shadow whose alpha stays below 0.2, so a Hyprland `ignore_alpha` of 0.25 blurs the glass but not the shadow.
+- Glass: far more transparent than the panel (alpha 0.46 at rest), with a 1 px light rim and a soft shadow whose alpha stays below 0.3, so a Hyprland `ignore_alpha` of 0.4 blurs the glass but not the shadow.
 - Click on the body → `default` action (if any), then dismiss. Close button and action buttons.
 - Do Not Disturb suppresses toasts, except critical ones.
 
 ### Panel
-- Right-edge layer surface, layer Top, namespace `tidings-panel`, width 380 logical, margins: top 52, right/bottom 8. Translucent glass background (alpha from the theme, default 0.45); Hyprland supplies the blur via a layer rule.
+- Right-edge layer surface, layer Top, namespace `tidings-panel`, width 380 logical, margins: top 52, right/bottom 8. Translucent glass background (alpha from the theme, default 0.62); Hyprland supplies the blur via a layer rule.
 - Header: "Notifications", a Do Not Disturb toggle, "Clear all".
 - Groups by app, newest group first. A multi-card group shows collapsed as a stacked card (up to 2 offset "sheets" peeking below), expands on click, and has a per-group "×" clear.
 - Card: icon (centred against the text), app name, relative time, bold summary, body (2 lines when collapsed), action buttons, hover "×".

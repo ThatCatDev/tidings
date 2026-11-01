@@ -5,7 +5,7 @@
 //! log it and fall back to [`Theme::default`].
 //!
 //! ```json
-//! { "mode": "dark", "surface": "#18181d", "primary": "#a8c7fa", "surfaceAlpha": 0.45 }
+//! { "mode": "dark", "surface": "#18181d", "primary": "#a8c7fa", "surfaceAlpha": 0.62 }
 //! ```
 
 use serde::Deserialize;
@@ -54,7 +54,7 @@ impl Rgb {
 }
 
 /// Glass alpha used when the file doesn't say.
-pub const DEFAULT_SURFACE_ALPHA: f32 = 0.45;
+pub const DEFAULT_SURFACE_ALPHA: f32 = 0.62;
 
 impl Theme {
     /// Built-in dark theme (matches the Noctalia hook's dark surfaces).
@@ -209,7 +209,7 @@ mod tests {
             }
         );
         assert_eq!(Theme::default(), Theme::dark());
-        assert!((Theme::default().surface_alpha - 0.45).abs() < f32::EPSILON);
+        assert!((Theme::default().surface_alpha - 0.62).abs() < f32::EPSILON);
     }
 
     #[test]

@@ -59,10 +59,10 @@ else
   OUTLINE="#a0b2d2"
 fi
 ON_ERROR="#ffffff"
-# Panel glass opacity. Light enough that the blurred backdrop shows through
-# (macOS-like); Hyprland's blur keeps text legible. Must stay above the
-# tidings-panel layer rule's ignore_alpha (0.35), or nothing is blurred.
-SURFACE_ALPHA="0.45"
+# Panel glass opacity, matched to the approved mockup (0.62 over a
+# full-brightness, saturated blur). Must stay above the tidings-panel layer
+# rule's ignore_alpha (0.55), or nothing is blurred.
+SURFACE_ALPHA="0.62"
 
 mkdir -p "$(dirname "$OUT")"
 # Write then rename, so the daemon never reads a half-written file.

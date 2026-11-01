@@ -274,17 +274,17 @@ pub mod fills {
 /// alpha is above `T`. The toast surface holds two kinds of translucent
 /// pixels: the glass body (at least [`TOAST_ALPHA`]) and the soft drop
 /// shadow around it (at most [`SHADOW_ALPHA`]). Setting `T` between the two
-/// (`SHADOW_ALPHA < T < TOAST_ALPHA`, e.g. 0.25) blurs behind the body but not
+/// (`SHADOW_ALPHA < T < TOAST_ALPHA`, e.g. 0.4) blurs behind the body but not
 /// behind the shadow, which would otherwise show as a blurred halo. Keep that
 /// gap when tuning these values. The shadow is cut out under the body, so it
 /// never adds to the body's alpha.
 pub mod toast_glass {
     /// A resting collapsed toast; the lowest body alpha on the surface.
-    pub const TOAST_ALPHA: f32 = 0.32;
-    /// A hovered collapsed toast (≈ 0.44 once the sheen is on top).
-    pub const TOAST_HOVER_ALPHA: f32 = 0.40;
-    /// An expanded toast (≈ 0.42 once the sheen is on top).
-    pub const TOAST_EXPANDED_ALPHA: f32 = 0.38;
+    pub const TOAST_ALPHA: f32 = 0.46;
+    /// A hovered collapsed toast (≈ 0.56 once the sheen is on top).
+    pub const TOAST_HOVER_ALPHA: f32 = 0.54;
+    /// An expanded toast (≈ 0.52 once the sheen is on top).
+    pub const TOAST_EXPANDED_ALPHA: f32 = 0.50;
     /// Tint layered over hovered/expanded glass so it reads lighter, not
     /// just more opaque.
     pub const TOAST_SHEEN_ALPHA: f32 = 0.04;
@@ -292,7 +292,7 @@ pub mod toast_glass {
     pub const TOAST_RIM_ALPHA: f32 = 0.16;
     /// Peak opacity of the drop shadow, right at the toast's edge. Must stay
     /// below Hyprland's `ignore_alpha` (and so below [`TOAST_ALPHA`]).
-    pub const SHADOW_ALPHA: f32 = 0.18;
+    pub const SHADOW_ALPHA: f32 = 0.28;
     /// How far the shadow fades out beyond the toast's edge (logical px).
     pub const SHADOW_SPREAD: f32 = 9.0;
     /// Downward shift of the shadow (logical px).
@@ -440,7 +440,7 @@ pub fn default_theme() -> Theme {
         error: Rgb(0xff, 0x8a, 0x80),
         on_error: Rgb(0x4a, 0x0b, 0x06),
         outline: Rgb(0x6e, 0x6b, 0x7a),
-        surface_alpha: tidings_core::theme_file::DEFAULT_SURFACE_ALPHA,
+        surface_alpha: 0.62,
     }
 }
 
