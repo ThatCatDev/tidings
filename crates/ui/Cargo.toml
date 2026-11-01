@@ -9,4 +9,15 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+cosmic-text = "0.17.0"
+freedesktop-icons = "0.4.0"
+image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "ico"] }
+log = "0.4.35"
+resvg = "0.49.0"
+smithay-client-toolkit = "0.20.0"
+thiserror = "2.0.21"
 tidings-core.workspace = true
+tiny-skia = "0.12.0"
+
+[dev-dependencies]
+env_logger = "0.11.11"
