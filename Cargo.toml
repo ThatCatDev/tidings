@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/thatcatdev/tidings"
-rust-version = "1.85"
+rust-version = "1.89"
 
 [workspace.dependencies]
 tidings-core = { path = "crates/core" }

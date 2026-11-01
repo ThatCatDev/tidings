@@ -12,3 +12,12 @@ pub mod model; // CONTRACT
 pub mod theme; // CONTRACT
 pub mod ui; // CONTRACT
 pub mod view; // CONTRACT
+
+pub mod clock;
+pub mod panel;
+pub mod policy;
+pub mod store;
+pub mod theme_file;
+pub mod time_label;
+pub mod toasts;
+pub mod view_builder;

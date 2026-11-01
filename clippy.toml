@@ -1,0 +1,3 @@
+# unwrap()/expect() are fine in tests; the workspace warns on them elsewhere.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
