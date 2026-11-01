@@ -1,0 +1,30 @@
+# cocogitto: Conventional Commits -> semantic versions, CHANGELOG and tags.
+#
+# One version for the whole workspace (it ships as one binary): the source of
+# truth is `[workspace.package] version` in the root Cargo.toml, which every
+# crate inherits. Releases are cut by .github/workflows/release.yml.
+
+tag_prefix = "v"
+branch_whitelist = ["main"]
+ignore_merge_commits = true
+
+# Before the release commit: write the new version into Cargo.toml and refresh
+# Cargo.lock so the commit cog creates carries both. The sed rewrites only the
+# first top-level `version = ...`, which is the [workspace.package] one (crate
+# manifests use `version.workspace = true`).
+pre_bump_hooks = [
+    "sed -i -E '0,/^version = \"[^\"]*\"/s//version = \"{{version}}\"/' Cargo.toml",
+    "cargo update --workspace",
+]
+
+post_bump_hooks = [
+    "git push origin HEAD:main",
+    "git push origin v{{version}}",
+]
+
+[changelog]
+path = "CHANGELOG.md"
+template = "remote"
+remote = "github.com"
+owner = "ThatCatDev"
+repository = "tidings"
