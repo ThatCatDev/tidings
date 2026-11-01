@@ -10,3 +10,11 @@ workspace = true
 
 [dependencies]
 tidings-core.workspace = true
+# Raw evdev structs and ioctls; a full evdev wrapper isn't needed for one
+# read-only multitouch stream.
+libc = "0.2"
+thiserror = "2"
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
