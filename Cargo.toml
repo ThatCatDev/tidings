@@ -1,0 +1,32 @@
+[workspace]
+resolver = "3"
+members = ["crates/core", "crates/gesture", "crates/ui", "crates/tidings"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/thatcatdev/tidings"
+rust-version = "1.85"
+
+[workspace.dependencies]
+tidings-core = { path = "crates/core" }
+tidings-gesture = { path = "crates/gesture" }
+tidings-ui = { path = "crates/ui" }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+unwrap_used = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

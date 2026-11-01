@@ -1,0 +1,15 @@
+[package]
+name = "tidings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "macOS-style Notification Centre for Hyprland"
+
+[lints]
+workspace = true
+
+[dependencies]
+tidings-core.workspace = true
+tidings-gesture.workspace = true
+tidings-ui.workspace = true
