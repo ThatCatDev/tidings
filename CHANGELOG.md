@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## [v0.2.5](https://github.com/ThatCatDev/tidings/compare/fe1f20bc3493e3d7b506010f077c10daa79f9a70..v0.2.5) - 2026-11-01
+#### Bug Fixes
+- (**ui**) match the mockup's glass opacity - ([fe1f20b](https://github.com/ThatCatDev/tidings/commit/fe1f20bc3493e3d7b506010f077c10daa79f9a70)) - James, Claude Opus 5.5
+
+- - -
+
 ## [v0.2.4](https://github.com/ThatCatDev/tidings/compare/5b4092da1030e59b0fd23d4805f9854219944d28..v0.2.4) - 2026-11-01
 #### Bug Fixes
 - (**ui**) match toasts to the approved mockup - ([5b4092d](https://github.com/ThatCatDev/tidings/commit/5b4092da1030e59b0fd23d4805f9854219944d28)) - James, Claude Opus 5.5
