@@ -29,6 +29,13 @@ pub mod metrics {
     pub const ICON_SIZE: f32 = 36.0;
     /// Round icon badge.
     pub const ICON_RADIUS: f32 = ICON_SIZE / 2.0;
+    /// App badge on an avatar (see [`crate::layout::card::avatar_images`]):
+    /// its size as a fraction of the avatar, how much of it hangs past the
+    /// avatar's bottom-right edge, and the width of the ring that separates
+    /// it from the avatar.
+    pub const BADGE_SCALE: f32 = 0.44;
+    pub const BADGE_OVERHANG: f32 = 0.8;
+    pub const BADGE_RING: f32 = 1.5;
     pub const ICON_GAP: f32 = 10.0;
     pub const LINE_GAP: f32 = 2.0;
 
@@ -222,6 +229,9 @@ impl Fill {
 pub mod fills {
     use super::{Fill, Role};
 
+    /// Ring behind an avatar badge: the surface colour, so the badge reads as
+    /// sitting on top of the avatar on any glass.
+    pub const BADGE_RING: Fill = Fill::new(Role::Surface, 0.95);
     pub const CARD: Fill = Fill::new(Role::Tint, 0.075);
     pub const CARD_HOVER: Fill = Fill::new(Role::Tint, 0.11);
     pub const SHEET_1: Fill = Fill::new(Role::Tint, 0.07);

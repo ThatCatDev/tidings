@@ -1,6 +1,6 @@
 //! Notification card layout, shared by panel cards, stacks and toasts.
 
-use tidings_core::model::{Action, Urgency};
+use tidings_core::model::{Action, Image, Urgency};
 use tidings_core::view::CardView;
 
 use crate::geom::{Point, Rect, snap};
@@ -28,7 +28,7 @@ pub struct CardSpec {
     /// Body line clamp.
     pub body_lines: u32,
     /// Side of a square in the card's top-right corner (from the outer edge)
-    /// kept clear of text and the thumbnail, for a corner button.
+    /// kept clear of text, for a corner button.
     pub corner_reserve: f32,
 }
 
@@ -50,7 +50,6 @@ pub struct CardLayout {
     pub width: f32,
     pub height: f32,
     icon: Rect,
-    thumb: Option<Rect>,
     app: (Rect, TextFit),
     time: (Rect, TextFit),
     summary: Option<(Rect, TextFit)>,
@@ -90,17 +89,10 @@ pub fn measure_card_with(
     } = spec;
     let pad = m::CARD_PADDING;
     let text_x = pad + m::ICON_SIZE + m::ICON_GAP;
-    let has_thumb = card.icon.is_some() && card.image.is_some();
     let col_right = width - pad;
-    let text_w = col_right
-        - text_x
-        - if has_thumb {
-            m::ICON_SIZE + m::ICON_GAP
-        } else {
-            0.0
-        };
+    let text_w = col_right - text_x;
 
-    // Row 1: app name (left) and time (right, spanning the thumbnail column).
+    // Row 1: app name (left) and time (right).
     let meta_h = TextStyle::Meta.line_height();
     // Rows starting inside the corner reserve stop short of it.
     let clear_right = width - corner_reserve - CORNER_GAP;
@@ -140,23 +132,7 @@ pub fn measure_card_with(
         (r, f)
     });
     let text_bottom = y - m::LINE_GAP;
-    let thumb = has_thumb.then(|| {
-        // Below a corner button if there is one.
-        let below_button = if corner_reserve > 0.0 {
-            corner_reserve + CORNER_GAP
-        } else {
-            0.0
-        };
-        Rect::new(
-            col_right - m::ICON_SIZE,
-            (pad + meta_h + m::LINE_GAP).max(below_button),
-            m::ICON_SIZE,
-            m::ICON_SIZE,
-        )
-    });
-    let content_bottom = text_bottom
-        .max(pad + m::ICON_SIZE)
-        .max(thumb.map_or(0.0, |t| t.bottom()));
+    let content_bottom = text_bottom.max(pad + m::ICON_SIZE);
 
     // The icon sits centred against the text block, like macOS.
     let icon_y = snap(pad + ((content_bottom - pad) - m::ICON_SIZE) / 2.0, scale);
@@ -174,7 +150,6 @@ pub fn measure_card_with(
         width,
         height: snap(bottom + pad, scale),
         icon,
-        thumb,
         app: (app_rect, app),
         time: (time_rect, time),
         summary,
@@ -229,6 +204,58 @@ fn text(rect: Rect, fit: &TextFit, style: TextStyle, fill: Fill, align: Align) -
         fill,
         align,
         wrap_width: rect.w,
+    }
+}
+
+/// Which images an avatar shows: `(main, badge)`.
+///
+/// When a notification carries both an image and an app icon, the image is
+/// the avatar and the app icon a small badge on it, as macOS does for web
+/// notifications. Chrome, for one, sends its own logo as `app_icon` and the
+/// site's icon (an `IRCCloud` or Gmail logo) as `image-path`: the site is what the
+/// reader needs to recognise, the browser only says where it came from.
+#[must_use]
+pub fn avatar_images(card: &CardView) -> (Option<Image>, Option<Image>) {
+    match (&card.image, &card.icon) {
+        (Some(image), Some(icon)) => (Some(image.clone()), Some(icon.clone())),
+        (image, icon) => (image.clone().or_else(|| icon.clone()), None),
+    }
+}
+
+/// Paints a round avatar in `rect`, with the app badge when there is one.
+pub fn emit_avatar(scene: &mut Scene, card: &CardView, rect: Rect) {
+    let (main, badge) = avatar_images(card);
+    let letter = fallback_letter(&card.app_name);
+    scene.push(Node::Image {
+        rect,
+        radius: rect.w / 2.0,
+        image: main,
+        fallback: letter,
+    });
+    if let Some(badge) = badge {
+        let size = (rect.w * m::BADGE_SCALE).round();
+        let at = Point::new(
+            rect.right() - size * m::BADGE_OVERHANG,
+            rect.bottom() - size * m::BADGE_OVERHANG,
+        );
+        let ring = m::BADGE_RING;
+        scene.push(Node::RoundRect {
+            rect: Rect::new(
+                at.x - ring,
+                at.y - ring,
+                size + 2.0 * ring,
+                size + 2.0 * ring,
+            ),
+            radius: size / 2.0 + ring,
+            fill: Some(fills::BADGE_RING),
+            stroke: None,
+        });
+        scene.push(Node::Image {
+            rect: Rect::new(at.x, at.y, size, size),
+            radius: size / 2.0,
+            image: Some(badge),
+            fallback: letter,
+        });
     }
 }
 
@@ -301,21 +328,7 @@ pub fn emit_card_content(
 ) {
     let at = |r: Rect| r.translate(origin.x, origin.y);
     let bounds = Rect::new(origin.x, origin.y, lay.width, lay.height);
-    let letter = fallback_letter(&card.app_name);
-    scene.push(Node::Image {
-        rect: at(lay.icon),
-        radius: m::ICON_RADIUS,
-        image: card.icon.clone().or_else(|| card.image.clone()),
-        fallback: letter,
-    });
-    if let Some(thumb) = lay.thumb {
-        scene.push(Node::Image {
-            rect: at(thumb),
-            radius: 8.0,
-            image: card.image.clone(),
-            fallback: letter,
-        });
-    }
+    emit_avatar(scene, card, at(lay.icon));
     let muted = Fill::solid(Role::OnSurfaceVariant);
     let strong = Fill::solid(Role::OnSurface);
     scene.push(text(
@@ -473,5 +486,68 @@ mod tests {
     fn fallback_letter_is_uppercase_alnum() {
         assert_eq!(fallback_letter("  firefox"), 'F');
         assert_eq!(fallback_letter("—"), '•');
+    }
+
+    fn img(name: &str) -> Image {
+        Image::IconName(name.into())
+    }
+
+    #[test]
+    fn site_image_is_the_avatar_and_app_icon_the_badge() {
+        // What Chrome sends for a web notification (captured off D-Bus): its
+        // own logo as app_icon, the site's icon as image-path.
+        let mut c = sample_card(1, "Google Chrome");
+        c.icon = Some(Image::Path("/tmp/chrome/logo.png".into()));
+        c.image = Some(Image::Path("/tmp/chrome/icon.png".into()));
+        let (main, badge) = avatar_images(&c);
+        assert_eq!(main, c.image);
+        assert_eq!(badge, c.icon);
+    }
+
+    #[test]
+    fn a_single_image_is_the_avatar_without_a_badge() {
+        let mut c = sample_card(1, "App");
+        c.icon = Some(img("firefox"));
+        c.image = None;
+        assert_eq!(avatar_images(&c), (Some(img("firefox")), None));
+        c.icon = None;
+        c.image = Some(img("photo"));
+        assert_eq!(avatar_images(&c), (Some(img("photo")), None));
+        c.image = None;
+        assert_eq!(avatar_images(&c), (None, None));
+    }
+
+    #[test]
+    fn badge_sits_on_the_avatar_bottom_right_above_a_ring() {
+        let mut c = sample_card(1, "Google Chrome");
+        c.icon = Some(img("google-chrome"));
+        c.image = Some(img("irccloud"));
+        let avatar = Rect::new(10.0, 10.0, 40.0, 40.0);
+        let mut scene = Scene::default();
+        emit_avatar(&mut scene, &c, avatar);
+        let images: Vec<(Rect, Option<Image>)> = scene
+            .nodes
+            .iter()
+            .filter_map(|n| match n {
+                Node::Image { rect, image, .. } => Some((*rect, image.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(images.len(), 2);
+        assert_eq!(images[0], (avatar, Some(img("irccloud"))));
+        let (badge, badge_img) = &images[1];
+        assert_eq!(badge_img, &Some(img("google-chrome")));
+        assert!(badge.w < avatar.w / 2.0);
+        // Overlaps the avatar's bottom-right corner and hangs past it.
+        assert!(badge.x > avatar.center().x && badge.y > avatar.center().y);
+        assert!(badge.right() > avatar.right() && badge.bottom() > avatar.bottom());
+        assert!(
+            scene
+                .nodes
+                .iter()
+                .any(|n| matches!(n, Node::RoundRect { rect, .. }
+                if rect.x < badge.x && rect.right() > badge.right())),
+            "a ring sits behind the badge"
+        );
     }
 }

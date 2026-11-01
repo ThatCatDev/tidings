@@ -16,7 +16,7 @@ use crate::style::{Fill, Role, TextStyle, fills, metrics as m, toast_glass};
 use crate::text::{TextFit, TextMeasure};
 
 use super::card::{
-    CardOpts, CardSpec, add_hit, card_radius, close_button, emit_card_content, fallback_letter,
+    CardOpts, CardSpec, add_hit, card_radius, close_button, emit_avatar, emit_card_content,
     measure_card_with,
 };
 
@@ -290,12 +290,7 @@ fn emit_compact(
     clip: Rect,
 ) {
     let at = |r: Rect| r.translate(origin.x, origin.y);
-    scene.push(Node::Image {
-        rect: at(lay.icon),
-        radius: m::TOAST_ICON_SIZE / 2.0,
-        image: card.icon.clone().or_else(|| card.image.clone()),
-        fallback: fallback_letter(&card.app_name),
-    });
+    emit_avatar(scene, card, at(lay.icon));
     let line = |(r, f): &(Rect, TextFit), style, fill, align| Node::Text {
         rect: at(*r),
         text: f.text.clone(),
