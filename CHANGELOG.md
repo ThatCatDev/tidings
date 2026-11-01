@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## [v0.2.3](https://github.com/ThatCatDev/tidings/compare/52964934733568dd1b5e4227fcb389c4beed7d79..v0.2.3) - 2026-11-01
+#### Bug Fixes
+- (**ui**) lighter glass so the blur shows through - ([5296493](https://github.com/ThatCatDev/tidings/commit/52964934733568dd1b5e4227fcb389c4beed7d79)) - James, Claude Opus 5.5
+
+- - -
+
 ## [v0.2.2](https://github.com/ThatCatDev/tidings/compare/2a398997970b19f66a34607fc7a1d04bfb9b0569..v0.2.2) - 2026-11-01
 #### Bug Fixes
 - (**ui**) keep app icons whole inside round avatars - ([2a39899](https://github.com/ThatCatDev/tidings/commit/2a398997970b19f66a34607fc7a1d04bfb9b0569)) - James, Claude Opus 5.5
