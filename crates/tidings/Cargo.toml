@@ -13,3 +13,18 @@ workspace = true
 tidings-core.workspace = true
 tidings-gesture.workspace = true
 tidings-ui.workspace = true
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+# Local time-zone offset for relative time labels ("Yesterday", weekdays).
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+thiserror = "2"
+# tokio drives the D-Bus server, IPC socket and expiry timers on one runtime.
+tokio = { version = "1", features = ["rt", "macros", "net", "io-util", "sync", "time", "signal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Use the tokio integration so zbus shares our runtime instead of spawning its own executor thread.
+zbus = { version = "6", default-features = false, features = ["tokio", "proxy", "service"] }
+
+[dev-dependencies]
+tempfile = "3"
+futures-util = { version = "0.3", default-features = false }
