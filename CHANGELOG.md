@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## [v0.2.2](https://github.com/ThatCatDev/tidings/compare/2a398997970b19f66a34607fc7a1d04bfb9b0569..v0.2.2) - 2026-11-01
+#### Bug Fixes
+- (**ui**) keep app icons whole inside round avatars - ([2a39899](https://github.com/ThatCatDev/tidings/commit/2a398997970b19f66a34607fc7a1d04bfb9b0569)) - James, Claude Opus 5.5
+
+- - -
+
 ## [v0.2.1](https://github.com/ThatCatDev/tidings/compare/e951a0f553ee3274bb62e411ea0c610071a037e5..v0.2.1) - 2026-11-01
 #### Bug Fixes
 - (**ui**) show the site's icon for browser notifications - ([e951a0f](https://github.com/ThatCatDev/tidings/commit/e951a0f553ee3274bb62e411ea0c610071a037e5)) - James, Claude Opus 5.5
