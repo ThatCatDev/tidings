@@ -63,7 +63,7 @@ fn sample(expanded: bool) -> ViewModel {
     let mut mail = card(
         12,
         "Thunderbird",
-        Some("org.gnome.TextEditor"),
+        None,
         "Quarterly planning — agenda",
         "Hi James, attached is the draft agenda for Thursday. Could you add the Hyprland roadmap items before the meeting? Thanks!",
         "2m",
@@ -98,7 +98,7 @@ fn sample(expanded: bool) -> ViewModel {
     let mut crit = card(
         7,
         "Battery",
-        Some("kitty"),
+        None,
         "Battery critically low",
         "5% remaining. Plug in your charger now.",
         "20m",

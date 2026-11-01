@@ -55,8 +55,8 @@ Dependency direction: `tidings -> {core, gesture, ui}`, `gesture -> core`, `ui -
 
 ### Toasts
 - Top-right below the bar: top margin 52 logical px, right margin 12, width 360. At most 4 visible, newest on top.
-- Compact pill: 58 logical px tall (radius 29), round 40 px icon, one-line summary with the time on the right, one line of body. Hover shows a "×" over the icon and swaps the time for a round expand (⌄) button, with a dot when the notification has actions.
-- Expanded: the full card (app name + time, summary, body up to 6 lines, action buttons) with a collapse (⌃) button in the top-right corner. The stack re-flows when a toast grows or shrinks. The UI sends `SetToastExpanded`.
+- Compact pill: 58 logical px tall (radius 29), round 40 px icon, a bold one-line summary over one line of body, then the time and a round 28 px expand (⌄) button (with a dot when the notification has actions). Hover tints the glass and shows a "×" over the icon.
+- Expanded: the full card (app name + time, summary, body up to 6 lines, action buttons) with the icon level with the app-name row and a collapse (⌃) button in the top-right corner. The stack re-flows when a toast grows or shrinks. The UI sends `SetToastExpanded`.
 - Expiry: low 4 s, normal 6 s, critical never. A positive client timeout wins; 0 means never. Hover or expansion pauses expiry; it resumes with the remaining time once the toast is neither. A replaced notification keeps its expanded state. Expired toasts stay in the panel history (unless `transient`).
 - Glass: more transparent than the panel (alpha 0.32 at rest), with a 1 px light rim and a soft shadow whose alpha stays below 0.2, so a Hyprland `ignore_alpha` of 0.25 blurs the glass but not the shadow.
 - Click on the body → `default` action (if any), then dismiss. Close button and action buttons.
@@ -66,7 +66,8 @@ Dependency direction: `tidings -> {core, gesture, ui}`, `gesture -> core`, `ui -
 - Right-edge layer surface, layer Top, namespace `tidings-panel`, width 380 logical, margins: top 52, right/bottom 8. Translucent glass background (alpha from the theme, default 0.45); Hyprland supplies the blur via a layer rule.
 - Header: "Notifications", a Do Not Disturb toggle, "Clear all".
 - Groups by app, newest group first. A multi-card group shows collapsed as a stacked card (up to 2 offset "sheets" peeking below), expands on click, and has a per-group "×" clear.
-- Card: icon, app name, relative time, bold summary, body (2 lines when collapsed), action buttons, hover "×".
+- Card: icon (centred against the text), app name, relative time, bold summary, body (2 lines when collapsed), action buttons, hover "×".
+- A missing icon becomes a letter tile: the app's first letter, dark on a pastel picked by a stable hash of the app name.
 - Empty state: "No Notifications".
 - Closing: outside click (a transparent full-output catcher surface `tidings-catcher` mapped while the panel is open), Esc, or the gesture.
 - Slide: openness 0..1 translates the panel content horizontally. Content opacity follows openness. The surface maps when openness > 0 and unmaps on settle-closed. The input region covers only the visible part.

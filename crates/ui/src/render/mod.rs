@@ -15,8 +15,8 @@ use tiny_skia::{
 };
 
 use crate::geom::{PxRect, Rect, physical_len, u32_to_f32};
-use crate::scene::{Align, GlyphKind, Node, Scene};
-use crate::style::{Fill, Palette, Rgba, Role, TextStyle, fills};
+use crate::scene::{Align, GlyphKind, Monogram, Node, Scene};
+use crate::style::{Fill, Palette, Rgba, TextStyle, fills, monogram_colors};
 
 /// Owns the font and image caches used for painting.
 #[derive(Debug, Default)]
@@ -171,7 +171,7 @@ impl Painter {
         rect: Rect,
         radius: f32,
         image: Option<&tidings_core::model::Image>,
-        fallback: char,
+        fallback: Monogram,
         ctx: &Ctx<'_>,
     ) {
         let (scale, palette, mask) = (ctx.scale, ctx.palette, ctx.mask);
@@ -210,24 +210,18 @@ impl Painter {
             pm.fill_path(path, &paint, FillRule::Winding, Transform::identity(), mask);
             return;
         }
-        fill_round_rect(
-            pm,
-            rect,
-            radius,
-            palette.resolve(fills::ICON_FALLBACK),
-            scale,
-            mask,
-        );
+        let (bg, fg) = monogram_colors(fallback.tint);
+        fill_round_rect(pm, rect, radius, bg, scale, mask);
         let lh = TextStyle::IconLetter.line_height();
         let tr = Rect::new(rect.x, rect.y + (rect.h - lh) / 2.0, rect.w, lh);
         self.text.draw(
             &mut pm.as_mut(),
-            &fallback.to_string(),
+            &fallback.letter.to_string(),
             TextStyle::IconLetter,
             rect.w,
             tr,
             Align::Center,
-            palette.resolve(Fill::solid(Role::OnPrimary)),
+            fg,
             scale,
             ctx.clip,
         );

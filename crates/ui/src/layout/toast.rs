@@ -1,8 +1,8 @@
 //! Toast layout: a compact one-line pill, or (expanded) the full card.
 //!
 //! A collapsed toast is always a [`m::TOAST_HEIGHT`] pill: round icon,
-//! one-line summary with the time on its right, one line of body. Hovering
-//! reveals a "×" over the icon and swaps the time for an expand (⌄) button.
+//! one-line summary over one line of body, then the time and a round expand
+//! (⌄) button. Hovering tints the glass and reveals a "×" over the icon.
 //! An expanded toast is laid out like a panel card, with a collapse (⌃)
 //! button in its top-right corner. Both float on their own glass with a soft
 //! drop shadow (see [`crate::style::toast_glass`]).
@@ -16,8 +16,8 @@ use crate::style::{Fill, Role, TextStyle, fills, metrics as m, toast_glass};
 use crate::text::{TextFit, TextMeasure};
 
 use super::card::{
-    CardOpts, CardSpec, add_hit, card_radius, close_button, emit_avatar, emit_card_content,
-    measure_card_with,
+    CardOpts, CardSpec, IconAlign, add_hit, card_radius, close_button, emit_avatar,
+    emit_card_content, measure_card_with,
 };
 
 /// One laid-out toast: a scene sized to the toast plus [`m::TOAST_INSET`] on
@@ -46,7 +46,7 @@ pub fn layout_toast(
         let lay = measure_card_with(c, spec, scale, meas);
         (lay.height, Shape::Expanded(lay))
     } else {
-        let lay = measure_compact(c, is_hovered, scale, meas);
+        let lay = measure_compact(c, scale, meas);
         (m::TOAST_HEIGHT, Shape::Compact(lay))
     };
     let size = Size::new(m::TOAST_WIDTH + 2.0 * inset, height + 2.0 * inset);
@@ -69,19 +69,17 @@ pub fn layout_toast(
     match &shape {
         Shape::Compact(lay) => {
             emit_compact(&mut scene, c, lay, origin, &opts, clip);
-            if let Some(button) = lay.expand {
-                chevron_button(
-                    &mut scene,
-                    button.translate(origin.x, origin.y),
-                    &ChevronSpec {
-                        kind: GlyphKind::ChevronDown,
-                        target: HitTarget::ExpandToast(c.id),
-                        dot: !c.actions.is_empty(),
-                    },
-                    hovered,
-                    clip,
-                );
-            }
+            chevron_button(
+                &mut scene,
+                lay.expand.translate(origin.x, origin.y),
+                &ChevronSpec {
+                    kind: GlyphKind::ChevronDown,
+                    target: HitTarget::ExpandToast(c.id),
+                    dot: !c.actions.is_empty(),
+                },
+                hovered,
+                clip,
+            );
         }
         Shape::Expanded(lay) => {
             emit_card_content(&mut scene, c, lay, origin, &opts, clip);
@@ -119,13 +117,16 @@ pub fn layout_toast(
 }
 
 /// How an expanded toast's card is measured: panel-card style, a longer body,
-/// and the top-right corner kept clear for the collapse button.
+/// the icon level with the app-name row, a little more room under the
+/// actions, and the top-right corner kept clear for the collapse button.
 #[must_use]
 pub fn expanded_spec() -> CardSpec {
     CardSpec {
         width: m::TOAST_WIDTH,
         body_lines: m::BODY_LINES_TOAST_EXPANDED,
         corner_reserve: m::CHEVRON_CORNER_INSET + m::CHEVRON_BUTTON,
+        icon_align: IconAlign::Top,
+        pad_bottom: m::TOAST_EXPANDED_PAD_BOTTOM,
     }
 }
 
@@ -157,17 +158,15 @@ struct CompactLayout {
     icon: Rect,
     summary: Option<(Rect, TextFit)>,
     body: Option<(Rect, TextFit)>,
-    /// Shown at rest; the expand button takes its place on hover.
+    /// The time label, vertically centred left of the expand button.
     time: Option<(Rect, TextFit)>,
-    expand: Option<Rect>,
+    expand: Rect,
 }
 
-fn measure_compact(
-    card: &CardView,
-    hovered: bool,
-    scale: f32,
-    meas: &mut dyn TextMeasure,
-) -> CompactLayout {
+/// Lays out the pill row: icon, text column, time, expand button, each
+/// [`m::TOAST_GAP_X`] apart, all vertically centred. The text column takes
+/// what is left and ellipsizes.
+fn measure_compact(card: &CardView, scale: f32, meas: &mut dyn TextMeasure) -> CompactLayout {
     let h = m::TOAST_HEIGHT;
     let icon_inset = m::TOAST_ICON_INSET;
     let icon = Rect::new(
@@ -177,20 +176,28 @@ fn measure_compact(
         m::TOAST_ICON_SIZE,
     );
     let text_x = icon.right() + m::TOAST_GAP_X;
-    let right = m::TOAST_WIDTH - m::TOAST_PAD_RIGHT;
+    let button = m::CHEVRON_BUTTON;
+    let expand = Rect::new(
+        m::TOAST_WIDTH - m::TOAST_PAD_RIGHT - button,
+        snap((h - button) / 2.0, scale),
+        button,
+        button,
+    );
+    let mut text_right = expand.x - m::TOAST_GAP_X;
 
-    let (text_right, expand, time) = if hovered {
-        let b = m::CHEVRON_BUTTON;
-        let button = Rect::new(right - b, snap((h - b) / 2.0, scale), b, b);
-        (button.x - m::TOAST_GAP_X, Some(button), None)
-    } else {
-        let fit = meas.fit(&card.time_label, TextStyle::Time, (right - text_x) / 2.0, 1);
-        (right, None, Some(fit))
-    };
-    // The time shares the first row; that row's text stops short of it.
-    let first_right = time
-        .as_ref()
-        .map_or(text_right, |t| text_right - t.width - m::TOAST_TIME_GAP);
+    let time = (!card.time_label.trim().is_empty()).then(|| {
+        let max_w = (text_right - text_x) / 2.0;
+        let fit = meas.fit(&card.time_label, TextStyle::Time, max_w, 1);
+        let lh = TextStyle::Time.line_height();
+        let r = Rect::new(
+            text_right - fit.width,
+            snap((h - lh) / 2.0, scale),
+            fit.width,
+            lh,
+        );
+        text_right = r.x - m::TOAST_GAP_X;
+        (r, fit)
+    });
 
     let has_summary = !card.summary.trim().is_empty();
     let has_body = !card.body.trim().is_empty();
@@ -201,30 +208,16 @@ fn measure_compact(
         (true, false) => sum_h,
         (false, _) => body_h,
     };
+    let w = (text_right - text_x).max(1.0);
     let mut y = snap((h - block) / 2.0, scale);
-    let first_y = y;
-    let mut first_row = true;
     let mut line = |text: &str, style: TextStyle, lh: f32| {
-        let w = if first_row { first_right } else { text_right } - text_x;
-        first_row = false;
-        let fit = meas.fit(text, style, w.max(1.0), 1);
-        let r = Rect::new(text_x, y, w.max(1.0), lh);
+        let fit = meas.fit(text, style, w, 1);
+        let r = Rect::new(text_x, y, w, lh);
         y += lh + m::TOAST_LINE_GAP;
         (r, fit)
     };
     let summary = has_summary.then(|| line(&card.summary, TextStyle::SummaryLine, sum_h));
     let body = has_body.then(|| line(&card.body, TextStyle::BodyLine, body_h));
-
-    let time = time.map(|fit| {
-        let first = if has_summary {
-            TextStyle::SummaryLine
-        } else {
-            TextStyle::BodyLine
-        };
-        let lh = TextStyle::Time.line_height();
-        let y = snap(first_y + baseline(first) - baseline(TextStyle::Time), scale);
-        (Rect::new(right - fit.width, y, fit.width, lh), fit)
-    });
     CompactLayout {
         icon,
         summary,
@@ -232,13 +225,6 @@ fn measure_compact(
         time,
         expand,
     }
-}
-
-/// Approximate baseline offset from the top of a line box, so text of
-/// different sizes on one row can share a baseline.
-fn baseline(style: TextStyle) -> f32 {
-    let size = style.size();
-    (style.line_height() - size) / 2.0 + size * 0.8
 }
 
 /// The toast's glass: shadow, translucent body, optional sheen, rim.
@@ -468,30 +454,28 @@ mod tests {
     }
 
     #[test]
-    fn at_rest_time_sits_right_of_the_summary() {
+    fn at_rest_time_and_expand_button_sit_right_of_the_text() {
         let t = lay(&toast(sample_card(9, "Mail"), false), None);
-        let time = texts(&t.scene, TextStyle::Time);
-        let sum = texts(&t.scene, TextStyle::SummaryLine);
-        assert_eq!(time.len(), 1);
-        assert_eq!(time[0].1, "now");
-        assert!(time[0].0.x >= sum[0].0.right());
-        assert!((time[0].0.right() - (t.card.right() - m::TOAST_PAD_RIGHT)).abs() < 0.01);
-        assert!(hit_rect(&t.scene, &HitTarget::ExpandToast(ID)).is_none());
-        assert!(hit_rect(&t.scene, &HitTarget::Dismiss(ID)).is_none());
-    }
-
-    #[test]
-    fn hover_shows_close_and_expand_and_hides_time() {
-        let t = lay(&toast(sample_card(9, "Mail"), false), Some(&hovered()));
         let s = &t.scene;
-        assert_eq!(texts(s, TextStyle::Time).len(), 0, "time gives way");
         let expand = hit_rect(s, &HitTarget::ExpandToast(ID));
-        let expand = expand.unwrap_or_else(|| panic!("no expand button"));
+        let expand = expand.unwrap_or_else(|| panic!("no expand button at rest"));
         assert_eq!((expand.w, expand.h), (28.0, 28.0));
         assert!((expand.center().y - t.card.center().y).abs() < 0.01);
         assert!((expand.right() - (t.card.right() - m::TOAST_PAD_RIGHT)).abs() < 0.01);
+
+        let time = texts(s, TextStyle::Time);
+        assert_eq!(time.len(), 1);
+        assert_eq!(time[0].1, "now");
+        let time = time[0].0;
+        assert!((time.right() - (expand.x - m::TOAST_GAP_X)).abs() < 0.01);
+        assert!((time.center().y - t.card.center().y).abs() < 0.51);
+        // Both text lines stop short of the time.
         let sum = texts(s, TextStyle::SummaryLine);
-        assert!(sum[0].0.right() <= expand.x);
+        let body = texts(s, TextStyle::BodyLine);
+        for (r, _) in sum.iter().chain(&body) {
+            assert!(r.right() <= time.x - m::TOAST_GAP_X + 0.01, "{r:?}");
+        }
+
         assert_eq!(
             s.hit_test(expand.center()).and_then(HitTarget::click_event),
             Some(UiEvent::SetToastExpanded {
@@ -499,6 +483,43 @@ mod tests {
                 expanded: true
             })
         );
+        assert_eq!(
+            s.hit_test(sum[0].0.center())
+                .and_then(HitTarget::click_event),
+            Some(UiEvent::Activate(ID))
+        );
+        assert!(
+            hit_rect(s, &HitTarget::Dismiss(ID)).is_none(),
+            "× only on hover"
+        );
+    }
+
+    #[test]
+    fn a_toast_without_a_time_label_gives_the_text_its_room() {
+        let mut c = sample_card(9, "Mail");
+        let with = lay(&toast(c.clone(), false), None);
+        c.time_label.clear();
+        let without = lay(&toast(c, false), None);
+        assert_eq!(texts(&without.scene, TextStyle::Time), Vec::new());
+        let w = |t: &ToastLayout| texts(&t.scene, TextStyle::SummaryLine)[0].0.w;
+        assert!(w(&without) > w(&with));
+        assert!(hit_rect(&without.scene, &HitTarget::ExpandToast(ID)).is_some());
+    }
+
+    #[test]
+    fn hover_adds_close_and_keeps_time_and_expand() {
+        let rest = lay(&toast(sample_card(9, "Mail"), false), None);
+        let t = lay(&toast(sample_card(9, "Mail"), false), Some(&hovered()));
+        let s = &t.scene;
+        assert_eq!(
+            texts(s, TextStyle::Time),
+            texts(&rest.scene, TextStyle::Time)
+        );
+        assert_eq!(
+            hit_rect(s, &HitTarget::ExpandToast(ID)),
+            hit_rect(&rest.scene, &HitTarget::ExpandToast(ID))
+        );
+        assert_ne!(body_fill(s), body_fill(&rest.scene), "hover tint");
 
         // The "×" overlaps the icon's top-left and wins the hit test.
         let close = hit_rect(s, &HitTarget::Dismiss(ID));
@@ -515,6 +536,14 @@ mod tests {
         );
     }
 
+    /// Fill of the toast body (the first surface fill after the shadow).
+    fn body_fill(s: &Scene) -> Option<Fill> {
+        s.nodes.iter().find_map(|n| match n {
+            Node::RoundRect { fill: Some(f), .. } if f.role == Role::Surface => Some(*f),
+            _ => None,
+        })
+    }
+
     fn has_dot(s: &Scene) -> bool {
         s.nodes
             .iter()
@@ -523,16 +552,15 @@ mod tests {
 
     #[test]
     fn actions_dot_only_when_there_are_actions() {
-        let with = lay(&toast(sample_card(9, "Mail"), false), Some(&hovered()));
-        assert!(has_dot(&with.scene));
-        let mut c = sample_card(9, "Mail");
-        c.actions.clear();
-        let without = lay(&toast(c, false), Some(&hovered()));
-        assert!(!has_dot(&without.scene));
-        let at_rest = lay(&toast(sample_card(9, "Mail"), false), None);
-        assert!(!has_dot(&at_rest.scene), "only on the hover button");
+        for h in [None, Some(hovered())] {
+            let with = lay(&toast(sample_card(9, "Mail"), false), h.as_ref());
+            assert!(has_dot(&with.scene));
+            let mut c = sample_card(9, "Mail");
+            c.actions.clear();
+            let without = lay(&toast(c, false), h.as_ref());
+            assert!(!has_dot(&without.scene));
+        }
     }
-
     #[test]
     fn expanded_toast_is_the_card_with_a_corner_collapse_button() {
         let mut c = sample_card(9, "Mail");
@@ -580,6 +608,30 @@ mod tests {
             s.hit_test(Point::new(t.card.x + 120.0, t.card.center().y)),
             Some(&HitTarget::Activate(ID))
         );
+    }
+
+    #[test]
+    fn expanded_icon_is_level_with_the_app_name_row() {
+        let mut c = sample_card(9, "Mail");
+        c.body = "word ".repeat(200);
+        let t = lay(&toast(c, true), None);
+        let icon = t.scene.nodes.iter().find_map(|n| match n {
+            Node::Image { rect, .. } => Some(*rect),
+            _ => None,
+        });
+        let icon = icon.unwrap_or_else(|| panic!("no icon"));
+        let meta = texts(&t.scene, TextStyle::Meta);
+        assert!((icon.y - meta[0].0.y).abs() < f32::EPSILON);
+        assert!((icon.y - (t.card.y + m::CARD_PADDING)).abs() < f32::EPSILON);
+        assert!(icon.center().y < t.card.center().y - 20.0, "not centred");
+        // A little more room under the actions than on the other sides.
+        let pills = t
+            .scene
+            .hits
+            .iter()
+            .filter(|h| matches!(h.target, HitTarget::Action { .. }));
+        let last = pills.map(|h| h.rect.bottom()).fold(0.0, f32::max);
+        assert!((t.card.bottom() - last - m::TOAST_EXPANDED_PAD_BOTTOM).abs() < 0.01);
     }
 
     #[test]

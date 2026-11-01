@@ -4,8 +4,8 @@ use tidings_core::model::{Action, Image, Urgency};
 use tidings_core::view::CardView;
 
 use crate::geom::{Point, Rect, snap};
-use crate::scene::{Align, GlyphKind, HitTarget, Node, Scene};
-use crate::style::{Fill, Role, TextStyle, fills, metrics as m};
+use crate::scene::{Align, GlyphKind, HitTarget, Monogram, Node, Scene};
+use crate::style::{Fill, MONOGRAM_TINTS, Role, TextStyle, fills, metrics as m};
 use crate::text::{TextFit, TextMeasure};
 
 /// How a card is presented.
@@ -30,6 +30,19 @@ pub struct CardSpec {
     /// Side of a square in the card's top-right corner (from the outer edge)
     /// kept clear of text, for a corner button.
     pub corner_reserve: f32,
+    /// Where the icon sits against the text block.
+    pub icon_align: IconAlign,
+    /// Padding under the last row (the other sides use [`m::CARD_PADDING`]).
+    pub pad_bottom: f32,
+}
+
+/// Vertical placement of a card's icon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IconAlign {
+    /// Centred against the text block, like macOS panel cards.
+    Center,
+    /// Level with the first (app name) row.
+    Top,
 }
 
 impl CardSpec {
@@ -40,6 +53,8 @@ impl CardSpec {
             width,
             body_lines,
             corner_reserve: 0.0,
+            icon_align: IconAlign::Center,
+            pad_bottom: m::CARD_PADDING,
         }
     }
 }
@@ -86,6 +101,8 @@ pub fn measure_card_with(
         width,
         body_lines,
         corner_reserve,
+        icon_align,
+        pad_bottom,
     } = spec;
     let pad = m::CARD_PADDING;
     let text_x = pad + m::ICON_SIZE + m::ICON_GAP;
@@ -134,8 +151,10 @@ pub fn measure_card_with(
     let text_bottom = y - m::LINE_GAP;
     let content_bottom = text_bottom.max(pad + m::ICON_SIZE);
 
-    // The icon sits centred against the text block, like macOS.
-    let icon_y = snap(pad + ((content_bottom - pad) - m::ICON_SIZE) / 2.0, scale);
+    let icon_y = match icon_align {
+        IconAlign::Center => snap(pad + ((content_bottom - pad) - m::ICON_SIZE) / 2.0, scale),
+        IconAlign::Top => pad,
+    };
     let icon = Rect::new(pad, icon_y, m::ICON_SIZE, m::ICON_SIZE);
 
     let (actions, bottom) = measure_actions(
@@ -148,7 +167,7 @@ pub fn measure_card_with(
 
     CardLayout {
         width,
-        height: snap(bottom + pad, scale),
+        height: snap(bottom + pad_bottom, scale),
         icon,
         app: (app_rect, app),
         time: (time_rect, time),
@@ -225,7 +244,7 @@ pub fn avatar_images(card: &CardView) -> (Option<Image>, Option<Image>) {
 /// Paints a round avatar in `rect`, with the app badge when there is one.
 pub fn emit_avatar(scene: &mut Scene, card: &CardView, rect: Rect) {
     let (main, badge) = avatar_images(card);
-    let letter = fallback_letter(&card.app_name);
+    let letter = monogram(&card.app_name);
     scene.push(Node::Image {
         rect,
         radius: rect.w / 2.0,
@@ -256,6 +275,27 @@ pub fn emit_avatar(scene: &mut Scene, card: &CardView, rect: Rect) {
             image: Some(badge),
             fallback: letter,
         });
+    }
+}
+
+/// The letter tile shown for `app_name` when its icon cannot be: the first
+/// letter, on a pastel picked from a stable hash of the name, so an app
+/// always gets the same colour (across runs, too) and different apps tend to
+/// differ.
+#[must_use]
+pub fn monogram(app_name: &str) -> Monogram {
+    // FNV-1a: tiny, stable across builds (unlike std's randomised hasher).
+    let hash = app_name
+        .trim()
+        .to_lowercase()
+        .bytes()
+        .fold(0x811c_9dc5_u32, |h, b| {
+            (h ^ u32::from(b)).wrapping_mul(0x0100_0193)
+        });
+    let n = u32::try_from(MONOGRAM_TINTS.len()).unwrap_or(1);
+    Monogram {
+        letter: fallback_letter(app_name),
+        tint: u8::try_from(hash % n).unwrap_or(0),
     }
 }
 
@@ -425,7 +465,7 @@ pub fn close_button(
         },
         stroke: Some(fills::CLOSE_RING),
     });
-    let g = radius * 0.8;
+    let g = radius * m::CLOSE_GLYPH;
     scene.push(Node::Glyph {
         rect: Rect::new(center.x - g / 2.0, center.y - g / 2.0, g, g),
         kind: GlyphKind::Close,
@@ -486,6 +526,83 @@ mod tests {
     fn fallback_letter_is_uppercase_alnum() {
         assert_eq!(fallback_letter("  firefox"), 'F');
         assert_eq!(fallback_letter("—"), '•');
+    }
+
+    #[test]
+    fn monogram_is_stable_per_app_and_varies_between_apps() {
+        let a = monogram("Thunderbird");
+        assert_eq!(a, monogram("Thunderbird"));
+        assert_eq!(a, monogram("  thunderbird "), "case and padding ignored");
+        assert_eq!(a.letter, 'T');
+        // FNV-1a of the folded name: the same in every build and run.
+        let fnv = "thunderbird".bytes().fold(0x811c_9dc5_u32, |h, b| {
+            (h ^ u32::from(b)).wrapping_mul(0x0100_0193)
+        });
+        assert_eq!(u32::from(a.tint), fnv % 6);
+        let apps = [
+            "Signal",
+            "Thunderbird",
+            "Battery",
+            "Firefox",
+            "Calculator",
+            "Slack",
+        ];
+        let tints: std::collections::HashSet<u8> = apps.iter().map(|a| monogram(a).tint).collect();
+        assert!(tints.len() >= 3, "{tints:?}");
+        assert!(tints.iter().all(|&t| usize::from(t) < MONOGRAM_TINTS.len()));
+    }
+
+    #[test]
+    fn avatar_carries_the_apps_monogram() {
+        let c = sample_card(1, "Signal");
+        let mut scene = Scene::default();
+        emit_avatar(&mut scene, &c, Rect::new(0.0, 0.0, 40.0, 40.0));
+        assert!(
+            scene.nodes.iter().any(
+                |n| matches!(n, Node::Image { fallback, .. } if *fallback == monogram("Signal"))
+            )
+        );
+    }
+
+    #[test]
+    fn icon_is_centred_on_panel_cards_and_top_aligned_on_request() {
+        let mut meas = MonoMeasure;
+        let mut c = sample_card(1, "Mail");
+        c.body = "word ".repeat(80);
+        let spec = CardSpec::panel(356.0, 4);
+        let centred = measure_card_with(&c, spec, 1.0, &mut meas);
+        let text_mid = f32::midpoint(
+            m::CARD_PADDING,
+            centred.body.as_ref().map_or(0.0, |(r, _)| r.bottom()),
+        );
+        assert!((centred.icon.center().y - text_mid).abs() < 1.0);
+        assert!(centred.icon.y > m::CARD_PADDING + 1.0);
+
+        let top = CardSpec {
+            icon_align: IconAlign::Top,
+            ..spec
+        };
+        let topped = measure_card_with(&c, top, 1.0, &mut meas);
+        assert!((topped.icon.y - topped.app.0.y).abs() < f32::EPSILON);
+        assert_eq!(topped.height, centred.height);
+    }
+
+    #[test]
+    fn bottom_padding_follows_the_spec() {
+        let mut meas = MonoMeasure;
+        let c = sample_card(1, "Mail");
+        let spec = CardSpec::panel(356.0, 2);
+        let a = measure_card_with(&c, spec, 1.0, &mut meas);
+        let b = measure_card_with(
+            &c,
+            CardSpec {
+                pad_bottom: spec.pad_bottom + 2.0,
+                ..spec
+            },
+            1.0,
+            &mut meas,
+        );
+        assert!((b.height - a.height - 2.0).abs() < f32::EPSILON);
     }
 
     fn img(name: &str) -> Image {

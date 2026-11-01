@@ -32,6 +32,14 @@ pub enum GlyphKind {
     ChevronUp,
 }
 
+/// A letter tile standing in for a missing icon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Monogram {
+    pub letter: char,
+    /// Index into [`crate::style::MONOGRAM_TINTS`] (wrapping).
+    pub tint: u8,
+}
+
 /// One drawing primitive.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Node {
@@ -80,12 +88,12 @@ pub enum Node {
         wrap_width: f32,
     },
     /// An icon or image, cover-fitted and rounded. If it cannot be loaded,
-    /// the painter draws a tinted tile with `fallback` as a letter.
+    /// the painter draws the `fallback` letter tile instead.
     Image {
         rect: Rect,
         radius: f32,
         image: Option<Image>,
-        fallback: char,
+        fallback: Monogram,
     },
     Glyph {
         rect: Rect,

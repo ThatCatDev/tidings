@@ -49,6 +49,8 @@ pub mod metrics {
     pub const ACTIONS_PER_ROW: usize = 3;
 
     pub const CLOSE_RADIUS: f32 = 10.0;
+    /// Span of the "×" cross as a fraction of its button's radius.
+    pub const CLOSE_GLYPH: f32 = 0.5;
     /// Close-button centre offset from a card's top-left corner.
     /// Far enough in that the button's centre stays inside a
     /// [`CARD_RADIUS_MAX`] corner.
@@ -76,13 +78,11 @@ pub mod metrics {
     pub const TOAST_ICON_SIZE: f32 = 40.0;
     /// Icon inset from the pill's left edge (and, centred, from top/bottom).
     pub const TOAST_ICON_INSET: f32 = (TOAST_HEIGHT - TOAST_ICON_SIZE) / 2.0;
-    /// Gap between the icon, the text column and the expand button.
+    /// Gap between the icon, the text column, the time and the expand button.
     pub const TOAST_GAP_X: f32 = 10.0;
     pub const TOAST_PAD_RIGHT: f32 = 14.0;
     /// Gap between the summary row and the body line.
     pub const TOAST_LINE_GAP: f32 = 1.0;
-    /// Gap between the summary and the time label on the summary row.
-    pub const TOAST_TIME_GAP: f32 = 8.0;
     /// Hover "×" on a toast: radius, and its centre's offset from the toast's
     /// top-left corner (it overlaps the icon's top-left, overhanging by 4).
     pub const TOAST_CLOSE_RADIUS: f32 = 11.0;
@@ -97,6 +97,9 @@ pub mod metrics {
     pub const ACTIONS_DOT_RADIUS: f32 = 3.5;
     /// Body line clamp in an expanded toast.
     pub const BODY_LINES_TOAST_EXPANDED: u32 = 6;
+    /// Padding under an expanded toast's last row (the other sides use
+    /// [`CARD_PADDING`]).
+    pub const TOAST_EXPANDED_PAD_BOTTOM: f32 = 14.0;
     pub const TOAST_MARGIN_TOP: i32 = 52;
     pub const TOAST_MARGIN_RIGHT: f32 = 12.0;
     pub const TOAST_GAP: f32 = 10.0;
@@ -148,12 +151,11 @@ impl TextStyle {
     #[must_use]
     pub fn size(self) -> f32 {
         match self {
-            Self::Title => 16.0,
+            Self::Title | Self::IconLetter => 16.0,
             Self::Meta | Self::Button => 12.0,
             Self::GroupTitle | Self::Summary | Self::SummaryLine => 14.0,
             Self::Body | Self::BodyLine => 13.0,
             Self::Time => 11.5,
-            Self::IconLetter => 18.0,
             Self::Empty => 15.0,
         }
     }
@@ -167,9 +169,9 @@ impl TextStyle {
     #[must_use]
     pub fn weight(self) -> Weight {
         match self {
-            Self::Title | Self::Summary | Self::SummaryLine | Self::GroupTitle => Weight::Semibold,
+            Self::Summary | Self::SummaryLine | Self::IconLetter => Weight::Bold,
+            Self::Title | Self::GroupTitle => Weight::Semibold,
             Self::Button | Self::Empty => Weight::Medium,
-            Self::IconLetter => Weight::Bold,
             Self::Meta | Self::Body | Self::BodyLine | Self::Time => Weight::Regular,
         }
     }
@@ -250,8 +252,7 @@ pub mod fills {
     pub const CRITICAL_OUTLINE: Fill = Fill::new(Role::Error, 0.7);
     pub const CLOSE_BG: Fill = Fill::new(Role::Surface, 0.96);
     pub const CLOSE_BG_HOVER: Fill = Fill::solid(Role::Surface);
-    pub const CLOSE_RING: Fill = Fill::new(Role::Outline, 0.6);
-    pub const ICON_FALLBACK: Fill = Fill::new(Role::Primary, 0.9);
+    pub const CLOSE_RING: Fill = Fill::new(Role::Outline, 0.4);
     pub const GLASS: Fill = Fill::solid(Role::Glass);
 
     use super::toast_glass as g;
@@ -305,6 +306,31 @@ pub mod toast_glass {
     );
 }
 
+/// Pastel `(background, letter)` pairs for letter-tile avatars, one picked
+/// per app (see [`crate::layout::card::monogram`]). Fixed rather than themed:
+/// the dark letter on a light pastel reads on any glass.
+pub const MONOGRAM_TINTS: [(Rgb, Rgb); 6] = [
+    // Blue.
+    (Rgb(0xa8, 0xc7, 0xfa), Rgb(0x13, 0x23, 0x3f)),
+    // Yellow.
+    (Rgb(0xfd, 0xe6, 0x8a), Rgb(0x42, 0x20, 0x06)),
+    // Pink.
+    (Rgb(0xfe, 0xca, 0xca), Rgb(0x45, 0x0a, 0x0a)),
+    // Orange.
+    (Rgb(0xfd, 0xba, 0x74), Rgb(0x43, 0x14, 0x07)),
+    // Lime.
+    (Rgb(0xd9, 0xf9, 0x9d), Rgb(0x1a, 0x2e, 0x05)),
+    // Lavender.
+    (Rgb(0xdd, 0xd6, 0xfe), Rgb(0x2e, 0x10, 0x65)),
+];
+
+/// The `(background, letter)` colours of monogram tint `index` (wrapping).
+#[must_use]
+pub fn monogram_colors(index: u8) -> (Rgba, Rgba) {
+    let (bg, fg) = MONOGRAM_TINTS[usize::from(index) % MONOGRAM_TINTS.len()];
+    (Rgba::opaque(bg), Rgba::opaque(fg))
+}
+
 /// Premultiplied-ready RGBA colour (straight alpha, 0..=1 channels).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rgba {
@@ -312,6 +338,19 @@ pub struct Rgba {
     pub g: f32,
     pub b: f32,
     pub a: f32,
+}
+
+impl Rgba {
+    /// A fully opaque colour.
+    #[must_use]
+    pub fn opaque(Rgb(r, g, b): Rgb) -> Self {
+        Self {
+            r: f32::from(r) / 255.0,
+            g: f32::from(g) / 255.0,
+            b: f32::from(b) / 255.0,
+            a: 1.0,
+        }
+    }
 }
 
 /// Resolves [`Role`]s against a [`Theme`].
@@ -435,6 +474,28 @@ mod tests {
         let mut theme = default_theme();
         theme.surface_alpha = 3.0;
         assert!((Palette::new(theme).surface_alpha() - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn summaries_are_bold() {
+        assert_eq!(TextStyle::Summary.weight(), Weight::Bold);
+        assert_eq!(TextStyle::SummaryLine.weight(), Weight::Bold);
+        assert_eq!(TextStyle::IconLetter.weight(), Weight::Bold);
+        assert_eq!(TextStyle::Title.weight(), Weight::Semibold);
+        assert!((TextStyle::Summary.size() - 14.0).abs() < f32::EPSILON);
+        assert!((TextStyle::SummaryLine.size() - 14.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn monogram_colors_wrap_and_are_opaque() {
+        let n = u8::try_from(MONOGRAM_TINTS.len()).unwrap_or(u8::MAX);
+        assert_eq!(monogram_colors(0), monogram_colors(n));
+        for i in 0..n {
+            let (bg, fg) = monogram_colors(i);
+            assert!((bg.a - 1.0).abs() < f32::EPSILON && (fg.a - 1.0).abs() < f32::EPSILON);
+            // Dark letter on a light pastel.
+            assert!(bg.r + bg.g + bg.b > 2.0 && fg.r + fg.g + fg.b < 0.8, "{i}");
+        }
     }
 
     #[test]
