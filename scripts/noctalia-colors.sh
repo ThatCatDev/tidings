@@ -59,9 +59,10 @@ else
   OUTLINE="#a0b2d2"
 fi
 ON_ERROR="#ffffff"
-# Must stay above Hyprland's blur ignore_alpha (0.12) yet keep text legible;
-# 0.60-0.62 is the balance found for swaync.
-SURFACE_ALPHA="0.62"
+# Panel glass opacity. Light enough that the blurred backdrop shows through
+# (macOS-like); Hyprland's blur keeps text legible. Must stay above the
+# tidings-panel layer rule's ignore_alpha (0.35), or nothing is blurred.
+SURFACE_ALPHA="0.45"
 
 mkdir -p "$(dirname "$OUT")"
 # Write then rename, so the daemon never reads a half-written file.

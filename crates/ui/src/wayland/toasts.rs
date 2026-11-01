@@ -266,7 +266,13 @@ mod tests {
             crate::geom::f32_to_u32(top.x),
             crate::geom::f32_to_u32(top.y),
         );
-        assert!(frame.pixel(cx, cy).is_some_and(|p| p.alpha() > 100));
+        // The toast's glass is painted there (text may add to it, never less).
+        let glass = crate::style::toast_glass::TOAST_ALPHA * 255.0 * 0.9;
+        assert!(
+            frame
+                .pixel(cx, cy)
+                .is_some_and(|p| f32::from(p.alpha()) >= glass)
+        );
     }
 
     #[test]
