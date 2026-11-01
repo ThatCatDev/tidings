@@ -3,7 +3,7 @@
 A macOS-style Notification Centre for Hyprland, in Rust.
 
 - **Notification daemon.** It implements `org.freedesktop.Notifications` (spec 1.2: actions, body markup, images, persistence), so it replaces swaync, mako or dunst.
-- **Toasts** in the top-right corner. Hovering pauses expiry, and they support action buttons and critical urgency.
+- **Toasts** in the top-right corner: compact one-line glass pills. Hovering pauses expiry; the expand button grows a toast into the full card (long body, action buttons), and an expanded toast stays until collapsed or dismissed.
 - **Notification Centre panel.** A full-height glass panel on the right edge. Notifications are grouped by app into macOS-style stacks, with Do Not Disturb, Clear all and per-group clear.
 - **Trackpad gesture.** Put two fingers on the right edge of the trackpad and swipe left: the panel **follows your fingers**. Let go past halfway, or flick, and it opens; otherwise it springs back. Two fingers swiping right close it the same way.
 
@@ -58,8 +58,10 @@ hl.bind("SUPER + A", hl.dsp.exec_cmd("tidings ctl toggle"))
 -- glass: blur behind the panel and the toasts
 hl.layer_rule({ name = "tidings-panel", match = { namespace = "^tidings-panel$" },
                 blur = true, ignore_alpha = 0.5, xray = false })
+-- toasts are lighter glass (alpha >= 0.46) with a soft shadow (alpha < 0.3):
+-- the threshold sits between, so the glass is blurred and the shadow is not
 hl.layer_rule({ name = "tidings-toast", match = { namespace = "^tidings-toast$" },
-                blur = true, ignore_alpha = 0.5, xray = false })
+                blur = true, ignore_alpha = 0.4, xray = false })
 ```
 
 ### Theme

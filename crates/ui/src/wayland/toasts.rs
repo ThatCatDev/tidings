@@ -240,6 +240,7 @@ mod tests {
         ToastView {
             card: sample_card(id, "Mail"),
             paused: false,
+            expanded: false,
         }
     }
 
@@ -253,7 +254,7 @@ mod tests {
         let later = t0 + Duration::from_secs(1);
         assert!(!s.is_animating(later));
         let h = s.needed_height(later);
-        assert!(h > 150.0);
+        assert!(h > 2.0 * m::TOAST_HEIGHT + m::TOAST_GAP);
         let rects = s.input_rects();
         assert_eq!(rects.len(), 2);
         assert!(rects[0].bottom() < rects[1].bottom());

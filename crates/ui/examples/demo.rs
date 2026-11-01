@@ -3,8 +3,12 @@
 //! `cargo run -p tidings-ui --example demo --release -- [mode] [hold-secs]`
 //!
 //! Modes: `all` (default: toasts slide in, then the panel slides open),
-//! `toasts`, `panel`, `half` (panel tracked to 50%), `expanded` (stack
-//! expanded), `empty`, `light` (light theme). UI events are printed.
+//! `toasts` (the compact stack, the second toast expanded), `panel`, `half`
+//! (panel tracked to 50%), `expanded` (stack expanded), `empty`, `light`
+//! (light theme). UI events are printed.
+//!
+//! `-- states <dir>` renders one toast collapsed, hovered and expanded to
+//! `<dir>/toast-*.png` offscreen (hover cannot be forced on a live surface).
 
 use std::sync::mpsc;
 use std::thread::sleep;
@@ -100,6 +104,7 @@ fn sample(expanded: bool) -> ViewModel {
         "20m",
     );
     crit.urgency = Urgency::Critical;
+    let crit_toast = crit.clone();
     let calc = card(
         5,
         "Calculator",
@@ -116,14 +121,21 @@ fn sample(expanded: bool) -> ViewModel {
             group("Battery", vec![crit], false),
             group("Calculator", vec![calc], false),
         ],
-        toasts: [chat[0].clone(), mail, photo]
-            .into_iter()
-            .map(|card| ToastView {
-                card,
-                paused: false,
-            })
-            .collect(),
+        toasts: vec![
+            toast(chat[0].clone(), false),
+            toast(mail, true),
+            toast(photo, false),
+            toast(crit_toast, false),
+        ],
         dnd: false,
+    }
+}
+
+fn toast(card: CardView, expanded: bool) -> ToastView {
+    ToastView {
+        card,
+        paused: expanded,
+        expanded,
     }
 }
 
@@ -157,6 +169,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let mut args = std::env::args().skip(1);
     let mode = args.next().unwrap_or_else(|| "all".into());
+    if mode == "states" {
+        let dir = args.next().unwrap_or_else(|| ".".into());
+        return render_states(std::path::Path::new(&dir));
+    }
+
     let hold = Duration::from_secs_f32(args.next().and_then(|s| s.parse().ok()).unwrap_or(3.0));
 
     let (tx, rx) = mpsc::channel();
@@ -209,4 +226,40 @@ fn open_and_hold(ui: &dyn tidings_core::ui::UiHandle, hold: Duration) {
     sleep(hold);
     ui.send(UiUpdate::Panel(PanelCommand::AnimateTo(0.0)));
     sleep(Duration::from_millis(600));
+}
+
+/// Renders the mail toast's three states over a dark backdrop at the
+/// laptop's 1.6 scale.
+fn render_states(dir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    use tidings_ui::layout::layout_toast;
+    use tidings_ui::render::Painter;
+    use tidings_ui::scene::HitTarget;
+    use tidings_ui::style::Palette;
+
+    let scale = 1.6;
+    let mut painter = Painter::new();
+    let palette = Palette::default();
+    let view = sample(false);
+    let mail = view
+        .toasts
+        .iter()
+        .find(|t| t.card.id == NotificationId(12))
+        .ok_or("no mail toast")?;
+    let hover = HitTarget::Activate(mail.card.id);
+    let states = [
+        ("collapsed", toast(mail.card.clone(), false), None),
+        ("hover", toast(mail.card.clone(), false), Some(&hover)),
+        ("expanded", toast(mail.card.clone(), true), None),
+    ];
+    for (name, t, hovered) in states {
+        let lay = layout_toast(&t, scale, hovered, &mut painter.text);
+        let (w, h) = tidings_ui::render::physical_size(&lay.scene, scale);
+        let mut pm = tiny_skia::Pixmap::new(w, h).ok_or("empty toast")?;
+        pm.fill(tiny_skia::Color::from_rgba8(0x1b, 0x12, 0x14, 0xff));
+        painter.paint_into(&mut pm, &lay.scene, &palette, scale);
+        let path = dir.join(format!("toast-{name}.png"));
+        pm.save_png(&path)?;
+        println!("wrote {}", path.display());
+    }
+    Ok(())
 }

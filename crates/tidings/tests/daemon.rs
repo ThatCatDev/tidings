@@ -220,6 +220,41 @@ async fn toast_expiry_follows_the_fake_clock() {
 }
 
 #[tokio::test]
+async fn expanded_toast_suspends_expiry() {
+    let t = TestDaemon::start().await;
+    let proxy = t.proxy().await;
+    let id = simple_notify(&proxy, "a", "read me").await;
+    t.wait_ui(|u| view(u).filter(|v| v.toasts.len() == 1)).await;
+
+    t.clock.advance(Duration::from_secs(1));
+    let expand = |expanded| {
+        AppEvent::Ui(UiEvent::SetToastExpanded {
+            id: NotificationId(id),
+            expanded,
+        })
+    };
+    t.daemon().events().send(expand(true)).unwrap();
+    t.wait_ui(|u| view(u).filter(|v| v.toasts.first().is_some_and(|t| t.expanded)))
+        .await;
+
+    // Long past the 6 s expiry: still toasting.
+    t.clock.advance(Duration::from_secs(60));
+    t.daemon().events().send(AppEvent::Tick).unwrap();
+    t.daemon().events().send(expand(false)).unwrap();
+    let v = t
+        .wait_ui(|u| view(u).filter(|v| v.toasts.first().is_some_and(|t| !t.expanded)))
+        .await;
+    assert_eq!(v.toasts[0].card.id, NotificationId(id));
+
+    // Collapsed: the 5 s that remained run out.
+    t.clock.advance(Duration::from_secs(5));
+    t.daemon().events().send(AppEvent::Tick).unwrap();
+    t.wait_ui(|u| view(u).filter(|v| v.toasts.is_empty())).await;
+    assert_eq!(t.value(Request::Count).await, "1", "kept in the panel");
+    t.shutdown().await;
+}
+
+#[tokio::test]
 async fn image_data_hint_round_trips_as_rgba() {
     let t = TestDaemon::start().await;
     let proxy = t.proxy().await;

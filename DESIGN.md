@@ -55,8 +55,11 @@ Dependency direction: `tidings -> {core, gesture, ui}`, `gesture -> core`, `ui -
 
 ### Toasts
 - Top-right below the bar: top margin 52 logical px, right margin 12, width 360. At most 4 visible, newest on top.
-- Expiry: low 4 s, normal 6 s, critical never. A positive client timeout wins; 0 means never. Hover pauses expiry. Expired toasts stay in the panel history (unless `transient`).
-- Click → `default` action (if any), then dismiss. Close button and action buttons.
+- Compact pill: 58 logical px tall (radius 29), round 40 px icon, one-line summary with the time on the right, one line of body. Hover shows a "×" over the icon and swaps the time for a round expand (⌄) button, with a dot when the notification has actions.
+- Expanded: the full card (app name + time, summary, body up to 6 lines, action buttons) with a collapse (⌃) button in the top-right corner. The stack re-flows when a toast grows or shrinks. The UI sends `SetToastExpanded`.
+- Expiry: low 4 s, normal 6 s, critical never. A positive client timeout wins; 0 means never. Hover or expansion pauses expiry; it resumes with the remaining time once the toast is neither. A replaced notification keeps its expanded state. Expired toasts stay in the panel history (unless `transient`).
+- Glass: far more transparent than the panel (alpha 0.46 at rest), with a 1 px light rim and a soft shadow whose alpha stays below 0.3, so a Hyprland `ignore_alpha` of 0.4 blurs the glass but not the shadow.
+- Click on the body → `default` action (if any), then dismiss. Close button and action buttons.
 - Do Not Disturb suppresses toasts, except critical ones.
 
 ### Panel

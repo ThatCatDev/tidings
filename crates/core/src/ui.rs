@@ -46,6 +46,14 @@ pub enum UiEvent {
         id: NotificationId,
         hovered: bool,
     },
+    /// The toast's expand/collapse button was clicked. Expanded toasts show
+    /// the full card and do not expire; collapsing resumes the countdown with
+    /// the time that remained. Carries the desired state (not a toggle) so a
+    /// double click racing a view update cannot flip it back.
+    SetToastExpanded {
+        id: NotificationId,
+        expanded: bool,
+    },
     /// Outside click, Esc, or close button.
     RequestClose,
     /// The panel finished an animation; `open` is the resting state.

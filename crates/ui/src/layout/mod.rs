@@ -4,14 +4,16 @@
 //! [`TextMeasure`] seam, so tests run with a deterministic fake.
 
 pub mod card;
+pub mod toast;
 
-use tidings_core::view::{CardView, GroupView, ToastView, ViewModel};
+use tidings_core::view::{CardView, GroupView, ViewModel};
 
 use crate::geom::{Point, Rect, Size, snap};
 use crate::scene::{Align, GlyphKind, HitTarget, Node, Scene};
 use crate::style::{Fill, Role, TextStyle, fills, metrics as m};
 use crate::text::TextMeasure;
 use card::{CardOpts, add_hit, close_button, emit_card, measure_card, pill};
+pub use toast::{ToastLayout, layout_toast, stack_offsets};
 
 /// Interaction state that affects layout.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -281,7 +283,6 @@ impl GroupLayout {
                     close_target: HitTarget::Dismiss(c.id),
                     hovered: card_hovered(c),
                     hovered_target: ui.hovered.clone(),
-                    glass: false,
                 };
                 emit_card(scene, c, lay, origin, &opts, clip);
             }
@@ -300,7 +301,6 @@ impl GroupLayout {
                     close_target: clear,
                     hovered,
                     hovered_target: ui.hovered.clone(),
-                    glass: false,
                 };
                 emit_card(scene, c, top, origin, &opts, clip);
             }
@@ -353,7 +353,6 @@ impl GroupLayout {
                         close_target: HitTarget::Dismiss(c.id),
                         hovered: card_hovered(c),
                         hovered_target: ui.hovered.clone(),
-                        glass: false,
                     };
                     emit_card(scene, c, lay, Point::new(origin.x, y), &opts, clip);
                     y += lay.height + m::ACTION_GAP;
@@ -373,18 +372,19 @@ fn emit_sheets(
     clip: Rect,
 ) {
     let card_rect = Rect::new(origin.x, origin.y, top.width, top.height);
+    let radius = card::card_radius(top.height);
     for i in (1..=sheets).rev() {
         let level = crate::geom::u32_to_f32(u32::try_from(i).unwrap_or(1));
         let inset = m::SHEET_INSET * level;
         let rect = Rect::new(
             origin.x + inset,
-            origin.y + top.height - 2.0 * m::CARD_RADIUS,
+            origin.y + top.height - 2.0 * radius,
             top.width - 2.0 * inset,
-            2.0 * m::CARD_RADIUS + m::SHEET_PEEK * level,
+            2.0 * radius + m::SHEET_PEEK * level,
         );
         scene.push(Node::Sheet {
             rect,
-            radius: m::CARD_RADIUS - 2.0 * level,
+            radius: radius - 2.0 * level,
             fill: if i == 1 {
                 fills::SHEET_1
             } else {
@@ -392,64 +392,10 @@ fn emit_sheets(
             },
             stroke: Some(fills::CARD_OUTLINE),
             cutout: card_rect,
-            cutout_radius: m::CARD_RADIUS,
+            cutout_radius: radius,
         });
-        add_hit(scene, rect, m::CARD_RADIUS, expand.clone(), clip);
+        add_hit(scene, rect, radius, expand.clone(), clip);
     }
-}
-
-/// One laid-out toast: a scene sized to the card plus [`m::TOAST_INSET`] on
-/// every side (room for the overhanging "×").
-#[derive(Debug, Clone, PartialEq)]
-pub struct ToastLayout {
-    pub id: tidings_core::model::NotificationId,
-    pub scene: Scene,
-    /// Card rect within `scene`.
-    pub card: Rect,
-}
-
-/// Lays out one toast card.
-pub fn layout_toast(
-    toast: &ToastView,
-    scale: f32,
-    hovered: Option<&HitTarget>,
-    meas: &mut dyn TextMeasure,
-) -> ToastLayout {
-    let c = &toast.card;
-    let lay = measure_card(c, m::TOAST_WIDTH, m::BODY_LINES_COLLAPSED, scale, meas);
-    let inset = m::TOAST_INSET;
-    let size = Size::new(m::TOAST_WIDTH + 2.0 * inset, lay.height + 2.0 * inset);
-    let mut scene = Scene::new(size);
-    let full = Rect::new(0.0, 0.0, size.w, size.h);
-    let opts = CardOpts {
-        body_target: HitTarget::Activate(c.id),
-        close_target: HitTarget::Dismiss(c.id),
-        hovered: hovered.and_then(HitTarget::card) == Some(c.id),
-        hovered_target: hovered.cloned(),
-        glass: true,
-    };
-    emit_card(&mut scene, c, &lay, Point::new(inset, inset), &opts, full);
-    ToastLayout {
-        id: c.id,
-        scene,
-        card: Rect::new(inset, inset, lay.width, lay.height),
-    }
-}
-
-/// Vertical offsets (scene top, in toast-surface coordinates) for a stack of
-/// toast scenes of the given heights, newest first.
-#[must_use]
-pub fn stack_offsets(heights: &[f32]) -> Vec<f32> {
-    let mut y = 0.0;
-    heights
-        .iter()
-        .map(|h| {
-            let top = y;
-            // Scenes include the inset on both sides; cards sit TOAST_GAP apart.
-            y += h - 2.0 * m::TOAST_INSET + m::TOAST_GAP;
-            top
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -597,8 +543,12 @@ pub(crate) mod tests {
         let s = &lay.scene;
         let card = rect_of(s, &HitTarget::Activate(NotificationId(1)));
         let close = rect_of(s, &HitTarget::Dismiss(NotificationId(1)));
-        // The "×" overhangs the card's top-left corner and wins the hit test.
-        assert!(close.x < card.x && close.y < card.y);
+        // The "×" sits in the card's top-left corner, its centre inside the
+        // pill's rounded corner, and wins the hit test over the card body.
+        let c = close.center();
+        let r = card::card_radius(card.h);
+        let corner = Point::new(card.x + r, card.y + r);
+        assert!((c.x - corner.x).hypot(c.y - corner.y) < r);
         assert_eq!(
             s.hit_test(close.center()),
             Some(&HitTarget::Dismiss(NotificationId(1)))
@@ -747,46 +697,5 @@ pub(crate) mod tests {
         let card = rect_of(&lay.scene, &HitTarget::Activate(NotificationId(1)));
         let h = card.h * 1.6;
         assert!((h - h.round()).abs() < 1e-3);
-    }
-
-    #[test]
-    fn toast_layout_and_stacking() {
-        let toast = ToastView {
-            card: sample_card(9, "Mail"),
-            paused: false,
-        };
-        let t = layout_toast(&toast, 1.0, None, &mut MonoMeasure);
-        assert!((t.card.w - m::TOAST_WIDTH).abs() < 0.01);
-        assert!((t.scene.size.h - t.card.h - 2.0 * m::TOAST_INSET).abs() < 0.01);
-        assert_eq!(
-            t.scene.hit_test(t.card.center()),
-            Some(&HitTarget::Activate(NotificationId(9)))
-        );
-        // Glass background present.
-        assert!(
-            t.scene.nodes.iter().any(
-                |n| matches!(n, Node::RoundRect { fill: Some(f), .. } if f.role == Role::Glass)
-            )
-        );
-        let offs = stack_offsets(&[100.0, 80.0, 50.0]);
-        assert_eq!(offs[0], 0.0);
-        assert!((offs[1] - (100.0 - 2.0 * m::TOAST_INSET + m::TOAST_GAP)).abs() < 0.01);
-        assert!(offs[2] > offs[1]);
-    }
-
-    #[test]
-    fn hovered_toast_shows_close() {
-        let toast = ToastView {
-            card: sample_card(9, "Mail"),
-            paused: true,
-        };
-        let h = HitTarget::Activate(NotificationId(9));
-        let t = layout_toast(&toast, 1.0, Some(&h), &mut MonoMeasure);
-        assert!(
-            t.scene
-                .hits
-                .iter()
-                .any(|x| x.target == HitTarget::Dismiss(NotificationId(9)))
-        );
     }
 }

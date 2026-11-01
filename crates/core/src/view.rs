@@ -35,8 +35,14 @@ pub struct GroupView {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToastView {
     pub card: CardView,
-    /// Expiry is paused while hovered; UI reports hover via `UiEvent`.
+    /// Expiry is paused: the toast is hovered or expanded. The UI reports
+    /// hover via [`UiEvent::ToastHover`](crate::ui::UiEvent::ToastHover).
     pub paused: bool,
+    /// Shown as the full card (app name, long body, action buttons) instead
+    /// of the compact one-line pill. An expanded toast never expires; the UI
+    /// toggles it via
+    /// [`UiEvent::SetToastExpanded`](crate::ui::UiEvent::SetToastExpanded).
+    pub expanded: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]

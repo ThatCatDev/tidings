@@ -315,6 +315,61 @@ fn hover_pauses_expiry() {
 }
 
 #[test]
+fn expanded_toast_does_not_expire_until_collapsed() {
+    let mut h = Harness::new();
+    let id = h.notify(notif("a"));
+    let expand = |expanded| UiEvent::SetToastExpanded {
+        id: NotificationId(id),
+        expanded,
+    };
+    h.clock.advance(Duration::from_secs(4));
+    h.ui(expand(true));
+    let t = &h.view().toasts[0];
+    assert!(t.expanded && t.paused);
+    assert_eq!(h.app.next_wakeup(), Some(LABEL_REFRESH));
+    h.tick_after(Duration::from_secs(600));
+    assert_eq!(h.toast_ids(), [id], "expanded toasts stay up");
+
+    // Hover in and out while expanded: still paused.
+    h.ui(UiEvent::ToastHover {
+        id: NotificationId(id),
+        hovered: true,
+    });
+    h.ui(UiEvent::ToastHover {
+        id: NotificationId(id),
+        hovered: false,
+    });
+    assert!(h.view().toasts[0].paused);
+
+    // Collapsing resumes the 2 s that remained.
+    h.ui(expand(false));
+    let t = &h.view().toasts[0];
+    assert!(!t.expanded && !t.paused);
+    h.tick_after(Duration::from_millis(1999));
+    assert_eq!(h.toast_ids(), [id]);
+    h.tick_after(Duration::from_millis(1));
+    assert_eq!(h.toast_ids(), Vec::<u32>::new());
+}
+
+#[test]
+fn dismissing_an_expanded_toast_forgets_it() {
+    let mut h = Harness::new();
+    let id = h.notify(notif("a"));
+    h.ui(UiEvent::SetToastExpanded {
+        id: NotificationId(id),
+        expanded: true,
+    });
+    h.ui(UiEvent::Dismiss(NotificationId(id)));
+    assert_eq!(h.toast_ids(), Vec::<u32>::new());
+    // Expanding something that is not toasting is a no-op.
+    h.ui(UiEvent::SetToastExpanded {
+        id: NotificationId(id),
+        expanded: true,
+    });
+    assert_eq!(h.toast_ids(), Vec::<u32>::new());
+}
+
+#[test]
 fn activate_invokes_default_then_dismisses() {
     let mut h = Harness::new();
     let with_default = h.notify(with(|n| n.has_default_action = true));

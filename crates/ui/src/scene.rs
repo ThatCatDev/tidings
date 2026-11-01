@@ -26,6 +26,10 @@ pub enum GlyphKind {
     Close,
     /// Crescent moon (Do Not Disturb).
     Moon,
+    /// "⌄" stroke chevron (expand).
+    ChevronDown,
+    /// "⌃" stroke chevron (collapse).
+    ChevronUp,
 }
 
 /// One drawing primitive.
@@ -47,6 +51,17 @@ pub enum Node {
         stroke: Option<Fill>,
         cutout: Rect,
         cutout_radius: f32,
+    },
+    /// A soft drop shadow around a rounded `rect`: `fill` at its peak right
+    /// at the shape's edge, fading to nothing `spread` beyond it, shifted
+    /// down by `offset_y`. Nothing is painted inside `rect` itself, so a
+    /// translucent shape on top never darkens.
+    Shadow {
+        rect: Rect,
+        radius: f32,
+        spread: f32,
+        offset_y: f32,
+        fill: Fill,
     },
     Circle {
         center: Point,
@@ -98,6 +113,12 @@ impl Node {
                 radius * 2.0,
                 radius * 2.0,
             ),
+            Self::Shadow {
+                rect,
+                spread,
+                offset_y,
+                ..
+            } => rect.translate(0.0, *offset_y).outset(*spread),
             Self::PushClip(_) | Self::PopClip => return None,
         };
         // Text descenders/ascenders may exceed the line box slightly.
@@ -122,6 +143,10 @@ pub enum HitTarget {
     Dismiss(NotificationId),
     /// Collapsed stack: expand the group.
     ExpandGroup(String),
+    /// A collapsed toast's expand (⌄) button.
+    ExpandToast(NotificationId),
+    /// An expanded toast's collapse (⌃) button.
+    CollapseToast(NotificationId),
     /// "Show less" on an expanded group.
     CollapseGroup(String),
     ClearGroup(String),
@@ -145,6 +170,14 @@ impl HitTarget {
             Self::ExpandGroup(key) | Self::CollapseGroup(key) => {
                 UiEvent::ToggleGroup { key: key.clone() }
             }
+            Self::ExpandToast(id) => UiEvent::SetToastExpanded {
+                id: *id,
+                expanded: true,
+            },
+            Self::CollapseToast(id) => UiEvent::SetToastExpanded {
+                id: *id,
+                expanded: false,
+            },
             Self::ClearGroup(key) => UiEvent::ClearGroup { key: key.clone() },
             Self::ClearAll => UiEvent::ClearAll,
             Self::ToggleDnd => UiEvent::ToggleDnd,
@@ -156,7 +189,11 @@ impl HitTarget {
     #[must_use]
     pub fn card(&self) -> Option<NotificationId> {
         match self {
-            Self::Activate(id) | Self::Dismiss(id) | Self::Action { id, .. } => Some(*id),
+            Self::Activate(id)
+            | Self::Dismiss(id)
+            | Self::Action { id, .. }
+            | Self::ExpandToast(id)
+            | Self::CollapseToast(id) => Some(*id),
             _ => None,
         }
     }
@@ -343,6 +380,18 @@ mod tests {
             Some(UiEvent::ToggleGroup { key: "k".into() })
         );
         assert_eq!(HitTarget::Background.click_event(), None);
+        assert_eq!(
+            HitTarget::ExpandToast(id).click_event(),
+            Some(UiEvent::SetToastExpanded { id, expanded: true })
+        );
+        assert_eq!(
+            HitTarget::CollapseToast(id).click_event(),
+            Some(UiEvent::SetToastExpanded {
+                id,
+                expanded: false
+            })
+        );
+        assert_eq!(HitTarget::CollapseToast(id).card(), Some(id));
         assert_eq!(HitTarget::Dismiss(id).card(), Some(id));
         assert_eq!(HitTarget::ClearAll.card(), None);
     }

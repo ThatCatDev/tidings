@@ -20,11 +20,15 @@ pub mod metrics {
     pub const PANEL_PADDING: f32 = 12.0;
     pub const HEADER_HEIGHT: f32 = 56.0;
 
-    pub const CARD_RADIUS: f32 = 16.0;
+    /// Cards are pills: corner radius is half the card height, capped here so
+    /// a tall card reads as a card with generous corners, not a lozenge. See
+    /// [`crate::layout::card::card_radius`].
+    pub const CARD_RADIUS_MAX: f32 = 28.0;
     pub const CARD_PADDING: f32 = 12.0;
     pub const CARD_GAP: f32 = 10.0;
     pub const ICON_SIZE: f32 = 36.0;
-    pub const ICON_RADIUS: f32 = 9.0;
+    /// Round icon badge.
+    pub const ICON_RADIUS: f32 = ICON_SIZE / 2.0;
     pub const ICON_GAP: f32 = 10.0;
     pub const LINE_GAP: f32 = 2.0;
 
@@ -35,7 +39,9 @@ pub mod metrics {
 
     pub const CLOSE_RADIUS: f32 = 10.0;
     /// Close-button centre offset from a card's top-left corner.
-    pub const CLOSE_OFFSET: f32 = 5.0;
+    /// Far enough in that the button's centre stays inside a
+    /// [`CARD_RADIUS_MAX`] corner.
+    pub const CLOSE_OFFSET: f32 = 10.0;
 
     /// Visible strip of each stacked "sheet" below a collapsed group.
     pub const SHEET_PEEK: f32 = 8.0;
@@ -46,14 +52,45 @@ pub mod metrics {
     pub const GROUP_HEADER_HEIGHT: f32 = 30.0;
 
     pub const TOAST_WIDTH: f32 = 360.0;
-    /// Transparent margin around the toast stack inside the toast surface,
-    /// leaving room for the hover close button that overhangs a card corner.
-    pub const TOAST_INSET: f32 = 8.0;
+    /// Transparent margin around each toast inside the toast surface, leaving
+    /// room for the drop shadow and the hover "×" that overhangs the icon.
+    /// Must not exceed [`TOAST_MARGIN_RIGHT`]: the right inset lives inside
+    /// the gap to the screen edge.
+    pub const TOAST_INSET: f32 = 12.0;
+    /// A collapsed toast is a fixed-height pill, whatever its text.
+    pub const TOAST_HEIGHT: f32 = 58.0;
+    /// Half the height: a true pill.
+    pub const TOAST_RADIUS: f32 = TOAST_HEIGHT / 2.0;
+    /// Round icon of a collapsed toast, vertically centred.
+    pub const TOAST_ICON_SIZE: f32 = 40.0;
+    /// Icon inset from the pill's left edge (and, centred, from top/bottom).
+    pub const TOAST_ICON_INSET: f32 = (TOAST_HEIGHT - TOAST_ICON_SIZE) / 2.0;
+    /// Gap between the icon, the text column and the expand button.
+    pub const TOAST_GAP_X: f32 = 10.0;
+    pub const TOAST_PAD_RIGHT: f32 = 14.0;
+    /// Gap between the summary row and the body line.
+    pub const TOAST_LINE_GAP: f32 = 1.0;
+    /// Gap between the summary and the time label on the summary row.
+    pub const TOAST_TIME_GAP: f32 = 8.0;
+    /// Hover "×" on a toast: radius, and its centre's offset from the toast's
+    /// top-left corner (it overlaps the icon's top-left, overhanging by 4).
+    pub const TOAST_CLOSE_RADIUS: f32 = 11.0;
+    pub const TOAST_CLOSE_OFFSET: f32 = TOAST_CLOSE_RADIUS - 4.0;
+    /// Round expand/collapse (chevron) button.
+    pub const CHEVRON_BUTTON: f32 = 28.0;
+    /// Chevron stroke icon size inside the button.
+    pub const CHEVRON_ICON: f32 = 14.0;
+    /// Collapse button inset from an expanded toast's top-right corner.
+    pub const CHEVRON_CORNER_INSET: f32 = 10.0;
+    /// "There are actions inside" dot on the expand button.
+    pub const ACTIONS_DOT_RADIUS: f32 = 3.5;
+    /// Body line clamp in an expanded toast.
+    pub const BODY_LINES_TOAST_EXPANDED: u32 = 6;
     pub const TOAST_MARGIN_TOP: i32 = 52;
     pub const TOAST_MARGIN_RIGHT: f32 = 12.0;
     pub const TOAST_GAP: f32 = 10.0;
 
-    /// Body line clamp in collapsed cards and toasts.
+    /// Body line clamp in collapsed panel cards.
     pub const BODY_LINES_COLLAPSED: u32 = 2;
     /// Body line clamp in expanded groups.
     pub const BODY_LINES_EXPANDED: u32 = 8;
@@ -74,6 +111,12 @@ pub enum TextStyle {
     Body,
     /// Pill buttons.
     Button,
+    /// Collapsed toast summary: one line, newlines folded.
+    SummaryLine,
+    /// Collapsed toast body: one line, newlines folded.
+    BodyLine,
+    /// Collapsed toast time label.
+    Time,
     /// Fallback icon letter.
     IconLetter,
     /// "No Notifications".
@@ -96,8 +139,9 @@ impl TextStyle {
         match self {
             Self::Title => 16.0,
             Self::Meta | Self::Button => 12.0,
-            Self::GroupTitle | Self::Summary => 14.0,
-            Self::Body => 13.0,
+            Self::GroupTitle | Self::Summary | Self::SummaryLine => 14.0,
+            Self::Body | Self::BodyLine => 13.0,
+            Self::Time => 11.5,
             Self::IconLetter => 18.0,
             Self::Empty => 15.0,
         }
@@ -112,10 +156,10 @@ impl TextStyle {
     #[must_use]
     pub fn weight(self) -> Weight {
         match self {
-            Self::Title | Self::Summary | Self::GroupTitle => Weight::Semibold,
+            Self::Title | Self::Summary | Self::SummaryLine | Self::GroupTitle => Weight::Semibold,
             Self::Button | Self::Empty => Weight::Medium,
             Self::IconLetter => Weight::Bold,
-            Self::Meta | Self::Body => Weight::Regular,
+            Self::Meta | Self::Body | Self::BodyLine | Self::Time => Weight::Regular,
         }
     }
 
@@ -124,7 +168,14 @@ impl TextStyle {
     pub fn single_line(self) -> bool {
         matches!(
             self,
-            Self::Title | Self::Meta | Self::GroupTitle | Self::Button | Self::IconLetter
+            Self::Title
+                | Self::Meta
+                | Self::GroupTitle
+                | Self::Button
+                | Self::IconLetter
+                | Self::SummaryLine
+                | Self::BodyLine
+                | Self::Time
         )
     }
 }
@@ -141,6 +192,8 @@ pub enum Role {
     Outline,
     /// Lightening tint for cards: `on_surface` in dark mode, white in light.
     Tint,
+    /// Pure black, for drop shadows.
+    Shadow,
     /// Glass background: `surface` at the theme's `surface_alpha` (times the
     /// fill alpha).
     Glass,
@@ -184,6 +237,56 @@ pub mod fills {
     pub const CLOSE_RING: Fill = Fill::new(Role::Outline, 0.6);
     pub const ICON_FALLBACK: Fill = Fill::new(Role::Primary, 0.9);
     pub const GLASS: Fill = Fill::solid(Role::Glass);
+
+    use super::toast_glass as g;
+    pub const TOAST: Fill = Fill::new(Role::Surface, g::TOAST_ALPHA);
+    pub const TOAST_HOVER: Fill = Fill::new(Role::Surface, g::TOAST_HOVER_ALPHA);
+    pub const TOAST_EXPANDED: Fill = Fill::new(Role::Surface, g::TOAST_EXPANDED_ALPHA);
+    /// Lightening sheen over a hovered or expanded toast's glass.
+    pub const TOAST_SHEEN: Fill = Fill::new(Role::Tint, g::TOAST_SHEEN_ALPHA);
+    pub const TOAST_RIM: Fill = Fill::new(Role::Tint, g::TOAST_RIM_ALPHA);
+    pub const TOAST_SHADOW: Fill = Fill::new(Role::Shadow, g::SHADOW_ALPHA);
+    /// "There are actions inside" dot on a toast's expand button.
+    pub const ACTIONS_DOT: Fill = Fill::solid(Role::Primary);
+}
+
+/// Toast glass: much more transparent than the panel, because Hyprland blurs
+/// what is behind it.
+///
+/// Hyprland's layer rule `ignore_alpha = T` blurs only behind pixels whose
+/// alpha is above `T`. The toast surface holds two kinds of translucent
+/// pixels: the glass body (at least [`TOAST_ALPHA`]) and the soft drop
+/// shadow around it (at most [`SHADOW_ALPHA`]). Setting `T` between the two
+/// (`SHADOW_ALPHA < T < TOAST_ALPHA`, e.g. 0.4) blurs behind the body but not
+/// behind the shadow, which would otherwise show as a blurred halo. Keep that
+/// gap when tuning these values. The shadow is cut out under the body, so it
+/// never adds to the body's alpha.
+pub mod toast_glass {
+    /// A resting collapsed toast; the lowest body alpha on the surface.
+    pub const TOAST_ALPHA: f32 = 0.46;
+    /// A hovered collapsed toast (≈ 0.56 once the sheen is on top).
+    pub const TOAST_HOVER_ALPHA: f32 = 0.54;
+    /// An expanded toast (≈ 0.52 once the sheen is on top).
+    pub const TOAST_EXPANDED_ALPHA: f32 = 0.50;
+    /// Tint layered over hovered/expanded glass so it reads lighter, not
+    /// just more opaque.
+    pub const TOAST_SHEEN_ALPHA: f32 = 0.04;
+    /// The 1 px light rim around every toast.
+    pub const TOAST_RIM_ALPHA: f32 = 0.16;
+    /// Peak opacity of the drop shadow, right at the toast's edge. Must stay
+    /// below Hyprland's `ignore_alpha` (and so below [`TOAST_ALPHA`]).
+    pub const SHADOW_ALPHA: f32 = 0.28;
+    /// How far the shadow fades out beyond the toast's edge (logical px).
+    pub const SHADOW_SPREAD: f32 = 9.0;
+    /// Downward shift of the shadow (logical px).
+    pub const SHADOW_OFFSET_Y: f32 = 3.0;
+
+    // The ignore_alpha gap, and the shadow fitting inside the toast inset.
+    const _: () = assert!(SHADOW_ALPHA < 0.35 && SHADOW_ALPHA + 0.1 < TOAST_ALPHA);
+    const _: () = assert!(
+        SHADOW_SPREAD + SHADOW_OFFSET_Y <= super::metrics::TOAST_INSET
+            && super::metrics::TOAST_INSET <= super::metrics::TOAST_MARGIN_RIGHT
+    );
 }
 
 /// Premultiplied-ready RGBA colour (straight alpha, 0..=1 channels).
@@ -229,6 +332,7 @@ impl Palette {
             Role::OnPrimary => t.on_primary,
             Role::Error => t.error,
             Role::Outline => t.outline,
+            Role::Shadow => Rgb(0, 0, 0),
             Role::Tint => match t.mode {
                 Mode::Dark => t.on_surface,
                 Mode::Light => Rgb(255, 255, 255),

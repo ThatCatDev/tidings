@@ -333,6 +333,10 @@ impl App {
                 let now = self.deps.clock.monotonic();
                 self.dirty |= self.toasts.set_hovered(id, hovered, now);
             }
+            UiEvent::SetToastExpanded { id, expanded } => {
+                let now = self.deps.clock.monotonic();
+                self.dirty |= self.toasts.set_expanded(id, expanded, now);
+            }
             UiEvent::RequestClose => {
                 let command = self.panel.set_open(false);
                 self.panel(command);

@@ -10,8 +10,8 @@ pub use self::image::ImageCache;
 pub use self::text::TextEngine;
 
 use tiny_skia::{
-    Color, FillRule, FilterQuality, LineCap, Mask, Paint, Path, PathBuilder, Pattern, Pixmap,
-    PixmapPaint, SpreadMode, Stroke, Transform,
+    Color, FillRule, FilterQuality, LineCap, LineJoin, Mask, Paint, Path, PathBuilder, Pattern,
+    Pixmap, PixmapPaint, SpreadMode, Stroke, Transform,
 };
 
 use crate::geom::{PxRect, Rect, physical_len, u32_to_f32};
@@ -102,6 +102,21 @@ impl Painter {
                 if let Some(m) = m {
                     shape(pm, *rect, *radius, Some(*fill), *stroke, ctx, Some(&m));
                 }
+            }
+            Node::Shadow {
+                rect,
+                radius,
+                spread,
+                offset_y,
+                fill,
+            } => {
+                let shadow = Shadow {
+                    rect: *rect,
+                    radius: *radius,
+                    spread: *spread,
+                    offset_y: *offset_y,
+                };
+                shadow.paint(pm, ctx.palette.resolve(*fill), ctx);
             }
             Node::Circle {
                 center,
@@ -319,6 +334,49 @@ struct Ctx<'a> {
     mask: Option<&'a Mask>,
 }
 
+/// A soft shadow approximated by stacked translucent rounded rects, each a
+/// little larger, so opacity falls off roughly linearly with distance.
+struct Shadow {
+    rect: Rect,
+    radius: f32,
+    spread: f32,
+    offset_y: f32,
+}
+
+impl Shadow {
+    const LAYERS: u8 = 8;
+
+    fn paint(&self, pm: &mut Pixmap, peak: Rgba, ctx: &Ctx<'_>) {
+        if peak.a <= 0.0 || self.spread <= 0.0 {
+            return;
+        }
+        // Never paint under the shape itself.
+        let Some(mask) = cutout_mask(pm, self.rect, self.radius, ctx.scale, ctx.clip.as_ref())
+        else {
+            return;
+        };
+        let n = f32::from(Self::LAYERS);
+        // Per-layer alpha so the innermost band, covered by every layer,
+        // composites to exactly `peak`.
+        let layer = Rgba {
+            a: 1.0 - (1.0 - peak.a).powf(1.0 / n),
+            ..peak
+        };
+        let base = self.rect.translate(0.0, self.offset_y);
+        for i in 1..=Self::LAYERS {
+            let d = self.spread * f32::from(i) / n;
+            fill_round_rect(
+                pm,
+                base.outset(d),
+                self.radius + d,
+                layer,
+                ctx.scale,
+                Some(&mask),
+            );
+        }
+    }
+}
+
 /// Fill and/or 1 px stroke of a rounded rect.
 fn shape(
     pm: &mut Pixmap,
@@ -422,6 +480,27 @@ fn glyph(
             let stroke = Stroke {
                 width: 1.6 * scale,
                 line_cap: LineCap::Round,
+                ..Stroke::default()
+            };
+            pm.stroke_path(&path, &solid(c), &stroke, Transform::identity(), mask);
+        }
+        GlyphKind::ChevronDown | GlyphKind::ChevronUp => {
+            // A 24-unit icon grid, like the SVG it mirrors: M6 9 l6 6 6-6.
+            let u = w.min(h) / 24.0;
+            let (top, bottom) = if kind == GlyphKind::ChevronDown {
+                (9.0, 15.0)
+            } else {
+                (15.0, 9.0)
+            };
+            let mut pb = PathBuilder::new();
+            pb.move_to(x + 6.0 * u, y + top * u);
+            pb.line_to(x + 12.0 * u, y + bottom * u);
+            pb.line_to(x + 18.0 * u, y + top * u);
+            let Some(path) = pb.finish() else { return };
+            let stroke = Stroke {
+                width: 2.5 * u,
+                line_cap: LineCap::Round,
+                line_join: LineJoin::Round,
                 ..Stroke::default()
             };
             pm.stroke_path(&path, &solid(c), &stroke, Transform::identity(), mask);

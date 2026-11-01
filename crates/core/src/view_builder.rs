@@ -40,10 +40,11 @@ pub fn build_view(
         .collect();
     let toasts = toasts
         .iter()
-        .filter_map(|(id, paused)| {
-            store.get(id).map(|e| ToastView {
+        .filter_map(|s| {
+            store.get(s.id).map(|e| ToastView {
                 card: card(&e.notification, clock),
-                paused,
+                paused: s.paused,
+                expanded: s.expanded,
             })
         })
         .take(max_toasts)
@@ -125,6 +126,7 @@ mod tests {
         toasts.show(NotificationId(1), None, Duration::ZERO);
         toasts.show(NotificationId(2), None, Duration::ZERO);
         toasts.set_hovered(NotificationId(2), true, Duration::ZERO);
+        toasts.set_expanded(NotificationId(1), true, Duration::ZERO);
         toasts.show(NotificationId(99), None, Duration::ZERO); // not stored: skipped
 
         let vm = build_view(&store, &toasts, false, 4, &clock);
@@ -144,8 +146,12 @@ mod tests {
         assert_eq!(first.actions.len(), 1);
         assert!(!vm.groups[1].expanded);
 
-        let toast_ids: Vec<_> = vm.toasts.iter().map(|t| (t.card.id.0, t.paused)).collect();
-        assert_eq!(toast_ids, [(2, true), (1, false)]);
+        let toast_ids: Vec<_> = vm
+            .toasts
+            .iter()
+            .map(|t| (t.card.id.0, t.paused, t.expanded))
+            .collect();
+        assert_eq!(toast_ids, [(2, true, false), (1, true, true)]);
         assert_eq!(vm.toasts[0].card.time_label, "now");
     }
 

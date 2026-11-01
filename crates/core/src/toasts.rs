@@ -1,6 +1,9 @@
 //! The on-screen toast stack: which notifications are toasting, newest
 //! first, and when each expires. Deadlines are monotonic times from
 //! [`Clock::monotonic`](crate::clock::Clock::monotonic).
+//!
+//! A toast's countdown is paused while it is hovered *or* expanded; it
+//! resumes, with the time that remained, once it is neither.
 
 use std::time::Duration;
 
@@ -11,7 +14,7 @@ enum Expiry {
     Never,
     /// Expires at this monotonic time.
     At(Duration),
-    /// Hovered: this much time remained when the pointer arrived.
+    /// Hovered or expanded: this much time remained when the pause began.
     Paused(Duration),
 }
 
@@ -20,6 +23,37 @@ struct Toast {
     id: NotificationId,
     expiry: Expiry,
     hovered: bool,
+    expanded: bool,
+}
+
+impl Toast {
+    fn paused(&self) -> bool {
+        self.hovered || self.expanded
+    }
+
+    /// Applies `change` to the hover/expand flags, pausing or resuming the
+    /// countdown if that flips. Returns whether any flag changed.
+    fn update(&mut self, now: Duration, change: impl FnOnce(&mut Self)) -> bool {
+        let before = (self.hovered, self.expanded);
+        let was_paused = self.paused();
+        change(self);
+        self.expiry = match (self.expiry, was_paused, self.paused()) {
+            (Expiry::At(at), false, true) => Expiry::Paused(at.saturating_sub(now)),
+            (Expiry::Paused(left), true, false) => Expiry::At(now + left),
+            (other, ..) => other,
+        };
+        before != (self.hovered, self.expanded)
+    }
+}
+
+/// A showing toast's presentation state, as reported by [`Toasts::iter`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToastState {
+    pub id: NotificationId,
+    /// The countdown is paused (hovered or expanded).
+    pub paused: bool,
+    /// Shown as the full card rather than the compact pill.
+    pub expanded: bool,
 }
 
 /// The toast stack, capped at `max_visible`.
@@ -42,21 +76,25 @@ impl Toasts {
 
     /// Shows (or re-shows) `id` on top with a fresh timer. Returns ids pushed
     /// off the bottom of the stack by the cap.
+    ///
+    /// A re-shown toast (a replaced notification) keeps its hover and expand
+    /// state: the content updates in place under the reader, and its fresh
+    /// timer stays paused until it is neither hovered nor expanded.
     pub fn show(
         &mut self,
         id: NotificationId,
         timeout: Option<Duration>,
         now: Duration,
     ) -> Vec<NotificationId> {
-        let hovered = self
+        let (hovered, expanded) = self
             .items
             .iter()
             .find(|t| t.id == id)
-            .is_some_and(|t| t.hovered);
+            .map_or((false, false), |t| (t.hovered, t.expanded));
         self.items.retain(|t| t.id != id);
         let expiry = match timeout {
             None => Expiry::Never,
-            Some(d) if hovered => Expiry::Paused(d),
+            Some(d) if hovered || expanded => Expiry::Paused(d),
             Some(d) => Expiry::At(now + d),
         };
         self.items.insert(
@@ -65,6 +103,7 @@ impl Toasts {
                 id,
                 expiry,
                 hovered,
+                expanded,
             },
         );
         if self.items.len() > self.max_visible {
@@ -74,7 +113,8 @@ impl Toasts {
         }
     }
 
-    /// Takes `id` off screen. Returns whether it was showing.
+    /// Takes `id` off screen, forgetting its hover and expand state. Returns
+    /// whether it was showing.
     pub fn remove(&mut self, id: NotificationId) -> bool {
         let before = self.items.len();
         self.items.retain(|t| t.id != id);
@@ -82,21 +122,23 @@ impl Toasts {
     }
 
     /// Records pointer hover; hovering pauses expiry, leaving resumes it with
-    /// the time that remained. Returns whether anything changed.
+    /// the time that remained (unless the toast is expanded). Returns whether
+    /// anything changed.
     pub fn set_hovered(&mut self, id: NotificationId, hovered: bool, now: Duration) -> bool {
-        let Some(t) = self.items.iter_mut().find(|t| t.id == id) else {
-            return false;
-        };
-        if t.hovered == hovered {
-            return false;
-        }
-        t.hovered = hovered;
-        t.expiry = match (t.expiry, hovered) {
-            (Expiry::At(at), true) => Expiry::Paused(at.saturating_sub(now)),
-            (Expiry::Paused(left), false) => Expiry::At(now + left),
-            (other, _) => other,
-        };
-        true
+        self.find_mut(id)
+            .is_some_and(|t| t.update(now, |t| t.hovered = hovered))
+    }
+
+    /// Expands or collapses `id`. An expanded toast does not expire;
+    /// collapsing resumes the countdown with the time that remained (unless
+    /// the toast is still hovered). Returns whether anything changed.
+    pub fn set_expanded(&mut self, id: NotificationId, expanded: bool, now: Duration) -> bool {
+        self.find_mut(id)
+            .is_some_and(|t| t.update(now, |t| t.expanded = expanded))
+    }
+
+    fn find_mut(&mut self, id: NotificationId) -> Option<&mut Toast> {
+        self.items.iter_mut().find(|t| t.id == id)
     }
 
     /// Removes and returns every toast whose deadline is at or before `now`.
@@ -124,9 +166,13 @@ impl Toasts {
             .min()
     }
 
-    /// Showing toasts, newest first, with whether each is paused (hovered).
-    pub fn iter(&self) -> impl Iterator<Item = (NotificationId, bool)> + '_ {
-        self.items.iter().map(|t| (t.id, t.hovered))
+    /// Showing toasts, newest first, with their presentation state.
+    pub fn iter(&self) -> impl Iterator<Item = ToastState> + '_ {
+        self.items.iter().map(|t| ToastState {
+            id: t.id,
+            paused: t.paused(),
+            expanded: t.expanded,
+        })
     }
 
     /// Whether `id` is toasting.
@@ -168,7 +214,7 @@ mod tests {
     }
 
     fn order(t: &Toasts) -> Vec<u32> {
-        t.iter().map(|(i, _)| i.0).collect()
+        t.iter().map(|s| s.id.0).collect()
     }
 
     #[test]
@@ -212,7 +258,10 @@ mod tests {
         t.show(id(1), Some(secs(6)), secs(0));
         assert!(t.set_hovered(id(1), true, secs(2)));
         assert!(!t.set_hovered(id(1), true, secs(2)), "no change");
-        assert_eq!(t.iter().next(), Some((id(1), true)));
+        assert_eq!(
+            t.iter().next().map(|s| (s.id, s.paused)),
+            Some((id(1), true))
+        );
         assert_eq!(t.next_deadline(), None);
         assert_eq!(t.expire(secs(100)), NONE);
         assert!(t.set_hovered(id(1), false, secs(100)));
@@ -238,5 +287,77 @@ mod tests {
         t.show(id(1), None, secs(0));
         t.clear();
         assert_eq!(t.len(), 0);
+    }
+
+    fn state(t: &Toasts, n: u32) -> Option<ToastState> {
+        t.iter().find(|s| s.id == id(n))
+    }
+
+    #[test]
+    fn expand_pauses_and_collapse_resumes_with_remaining_time() {
+        let mut t = Toasts::new(4);
+        t.show(id(1), Some(secs(6)), secs(0));
+        assert!(t.set_expanded(id(1), true, secs(4)));
+        assert!(!t.set_expanded(id(1), true, secs(4)), "no change");
+        let s = state(&t, 1);
+        assert_eq!(s.map(|s| (s.paused, s.expanded)), Some((true, true)));
+        assert_eq!(t.next_deadline(), None);
+        assert_eq!(t.expire(secs(1_000)), NONE, "expanded never expires");
+        assert!(t.set_expanded(id(1), false, secs(1_000)));
+        assert_eq!(state(&t, 1).map(|s| s.paused), Some(false));
+        assert_eq!(t.next_deadline(), Some(secs(1_002)));
+        assert_eq!(t.expire(secs(1_002)), vec![id(1)]);
+        assert!(!t.set_expanded(id(9), true, secs(0)), "unknown id");
+    }
+
+    #[test]
+    fn hover_and_expand_both_hold_the_pause() {
+        let mut t = Toasts::new(4);
+        t.show(id(1), Some(secs(6)), secs(0));
+        t.set_hovered(id(1), true, secs(1));
+        t.set_expanded(id(1), true, secs(2));
+        // Leaving while expanded keeps the pause.
+        t.set_hovered(id(1), false, secs(3));
+        assert_eq!(t.next_deadline(), None);
+        // Collapsing while hovered keeps it too.
+        t.set_hovered(id(1), true, secs(4));
+        t.set_expanded(id(1), false, secs(5));
+        assert_eq!(t.next_deadline(), None);
+        assert_eq!(state(&t, 1).map(|s| s.paused), Some(true));
+        // Only when neither holds does the original 5 s remainder resume.
+        t.set_hovered(id(1), false, secs(10));
+        assert_eq!(t.next_deadline(), Some(secs(15)));
+    }
+
+    #[test]
+    fn removal_forgets_expanded_state() {
+        let mut t = Toasts::new(4);
+        t.show(id(1), Some(secs(6)), secs(0));
+        t.set_expanded(id(1), true, secs(1));
+        t.remove(id(1));
+        t.show(id(1), Some(secs(6)), secs(2));
+        assert_eq!(state(&t, 1).map(|s| s.expanded), Some(false));
+        assert_eq!(t.next_deadline(), Some(secs(8)));
+    }
+
+    #[test]
+    fn reshow_keeps_expanded_and_paused_with_a_fresh_timer() {
+        let mut t = Toasts::new(4);
+        t.show(id(1), Some(secs(6)), secs(0));
+        t.set_expanded(id(1), true, secs(5));
+        t.show(id(1), Some(secs(6)), secs(20));
+        assert_eq!(state(&t, 1).map(|s| s.expanded), Some(true));
+        assert_eq!(t.next_deadline(), None);
+        t.set_expanded(id(1), false, secs(30));
+        assert_eq!(t.next_deadline(), Some(secs(36)));
+    }
+
+    #[test]
+    fn never_expiring_toasts_stay_never_through_expand() {
+        let mut t = Toasts::new(4);
+        t.show(id(1), None, secs(0));
+        t.set_expanded(id(1), true, secs(1));
+        t.set_expanded(id(1), false, secs(2));
+        assert_eq!(t.next_deadline(), None);
     }
 }
