@@ -6,7 +6,7 @@
 mod image;
 mod text;
 
-pub use self::image::ImageCache;
+pub use self::image::{ImageCache, Shape};
 pub use self::text::TextEngine;
 
 use tiny_skia::{
@@ -183,8 +183,20 @@ impl Painter {
         let path = rounded_rect_px(x, y, s, s, radius * scale);
         let loaded = image.and_then(|img| self.images.get(img, size));
         if let (Some(src), Some(path)) = (loaded, path.as_ref()) {
+            if src.shape == Shape::Icon {
+                // An icon is drawn whole, inset: the plate gives it the
+                // round silhouette every avatar shares.
+                fill_round_rect(
+                    pm,
+                    rect,
+                    radius,
+                    palette.resolve(fills::ICON_PLATE),
+                    scale,
+                    mask,
+                );
+            }
             let shader = Pattern::new(
-                src.as_ref().as_ref(),
+                src.pixmap.as_ref(),
                 SpreadMode::Pad,
                 FilterQuality::Nearest,
                 1.0,
