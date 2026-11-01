@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## [v0.2.1](https://github.com/ThatCatDev/tidings/compare/e951a0f553ee3274bb62e411ea0c610071a037e5..v0.2.1) - 2026-11-01
+#### Bug Fixes
+- (**ui**) show the site's icon for browser notifications - ([e951a0f](https://github.com/ThatCatDev/tidings/commit/e951a0f553ee3274bb62e411ea0c610071a037e5)) - James, Claude Opus 5.5
+
+- - -
+
 ## [v0.2.0](https://github.com/ThatCatDev/tidings/compare/0c6195c2bdfd5a5bba7371601368babad4cbdb7d..v0.2.0) - 2026-11-01
 #### Features
 - (**ui**) compact pill toasts that expand - ([048b750](https://github.com/ThatCatDev/tidings/commit/048b75062312777e169aff1ac9d0aebb6c525052)) - James, Claude Opus 5.5
