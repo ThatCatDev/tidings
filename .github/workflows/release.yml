@@ -1,0 +1,100 @@
+name: release
+
+# Semantic release: after CI passes on main, cocogitto reads the Conventional
+# Commits since the last tag. If any of them warrant a release (feat -> minor,
+# fix/perf -> patch, `!`/BREAKING CHANGE -> major), it bumps the workspace
+# version, updates CHANGELOG.md, commits "chore(version): vX.Y.Z", tags it and
+# pushes. This job then builds the binary and publishes a GitHub release with
+# the changelog section as notes.
+#
+# The push uses GITHUB_TOKEN, which does not trigger workflows, so the version
+# commit cannot start another release.
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Skip if main moved past the commit CI tested
+        id: guard
+        env:
+          TESTED: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [ "$(git rev-parse HEAD)" = "$TESTED" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "main is at $(git rev-parse HEAD), CI tested $TESTED; the newer run will release."
+          fi
+
+      - uses: ./.github/actions/install-cog
+        if: steps.guard.outputs.current == 'true'
+
+      - name: Work out the next version
+        id: next
+        if: steps.guard.outputs.current == 'true'
+        run: |
+          # `cog bump --dry-run` prints the next tag, or a notice when no
+          # commit warrants a release (and still exits 0).
+          next=$(cog bump --auto --dry-run 2>/dev/null || true)
+          if printf '%s' "$next" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "version=${next#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "Nothing to release."
+          fi
+
+      - name: System libraries
+        if: steps.next.outputs.version
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.next.outputs.version
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.next.outputs.version
+
+      - name: Bump, tag and push
+        if: steps.next.outputs.version
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          cog bump --auto
+
+      - name: Build
+        if: steps.next.outputs.version
+        run: cargo build --release --locked -p tidings
+
+      - name: Publish GitHub release
+        if: steps.next.outputs.version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.next.outputs.version }}
+        run: |
+          dist="tidings-v${VERSION}-x86_64-linux"
+          mkdir "$dist"
+          cp target/release/tidings scripts/noctalia-colors.sh README.md LICENSE "$dist/"
+          tar czf "$dist.tar.gz" "$dist"
+          sha256sum "$dist.tar.gz" > "$dist.tar.gz.sha256"
+          cog changelog --at "v${VERSION}" > notes.md
+          gh release create "v${VERSION}" "$dist.tar.gz" "$dist.tar.gz.sha256" \
+            --title "v${VERSION}" --notes-file notes.md --verify-tag

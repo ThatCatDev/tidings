@@ -8,6 +8,17 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  commits:
+    # Releases are derived from commit messages, so every commit since the last
+    # release must be a Conventional Commit (feat:, fix:, refactor:, ...).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/install-cog
+      - run: cog check --from-latest-tag
+
   check:
     runs-on: ubuntu-latest
     steps:

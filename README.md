@@ -86,6 +86,25 @@ sh tests/colors.sh              # the Noctalia colours script
 cargo run -p tidings-ui --example demo --release        # UI demo on the live compositor
 ```
 
+## Releases
+
+Releases are fully automatic (semantic release via [cocogitto](https://docs.cocogitto.io)). Commit messages must follow [Conventional Commits](https://www.conventionalcommits.org), and CI rejects any that don't.
+
+| commit | release |
+|---|---|
+| `fix: ...`, `perf: ...` | patch (0.1.0 → 0.1.1) |
+| `feat: ...` | minor (0.1.0 → 0.2.0) |
+| `feat!: ...` or a `BREAKING CHANGE:` footer | major |
+| `docs:`, `refactor:`, `test:`, `ci:`, `build:`, `chore:`, `style:` | no release |
+
+After CI passes on `main`, the release workflow does the rest:
+1. Bumps the workspace version in `Cargo.toml` and `Cargo.lock`.
+2. Updates `CHANGELOG.md`.
+3. Commits `chore(version): vX.Y.Z` and tags it.
+4. Publishes a GitHub release with the changelog and a `tidings-vX.Y.Z-x86_64-linux.tar.gz` binary.
+
+Locally, `cog check` validates messages and `cog bump --auto --dry-run` shows the next version.
+
 ## License
 
 MIT
