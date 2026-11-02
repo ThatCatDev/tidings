@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## [v0.5.0](https://github.com/ThatCatDev/tidings/compare/512b938aca3901bdaf8b5f997515e3edecff5c66..v0.5.0) - 2026-11-02
+#### Features
+- themes for the panel and toasts - ([512b938](https://github.com/ThatCatDev/tidings/commit/512b938aca3901bdaf8b5f997515e3edecff5c66)) - James, Claude Opus 5.5
+
+- - -
+
 ## [v0.4.0](https://github.com/ThatCatDev/tidings/compare/37287756d926fb9c6ba7dd3af5e5fdf23f61c200..v0.4.0) - 2026-11-02
 #### Features
 - type-checked config file - ([3728775](https://github.com/ThatCatDev/tidings/commit/37287756d926fb9c6ba7dd3af5e5fdf23f61c200)) - James, Claude Opus 5.5
