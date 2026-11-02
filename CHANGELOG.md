@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## [v0.3.0](https://github.com/ThatCatDev/tidings/compare/4a371e92accda2d5af893129c5e78e91343d3211..v0.3.0) - 2026-11-02
+#### Features
+- (**ui**) animate expanding and collapsing a notification group - ([4a371e9](https://github.com/ThatCatDev/tidings/commit/4a371e92accda2d5af893129c5e78e91343d3211)) - James, Claude Opus 5.5
+
+- - -
+
 ## [v0.2.6](https://github.com/ThatCatDev/tidings/compare/e89658f4b363385cb58a58e574e8979edbc74d10..v0.2.6) - 2026-11-02
 #### Bug Fixes
 - (**ui**) soft drop shadow instead of a dark ring - ([e89658f](https://github.com/ThatCatDev/tidings/commit/e89658f4b363385cb58a58e574e8979edbc74d10)) - James, Claude Opus 5.5
