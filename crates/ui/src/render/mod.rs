@@ -18,11 +18,13 @@ use tiny_skia::{
 
 use crate::geom::{PxRect, Rect, f32_to_i32, f32_to_u32, physical_len, u32_to_f32};
 use crate::scene::{Align, GlyphKind, Layer, Monogram, Node, Scene};
-use crate::style::{Fill, Palette, Rgba, TextStyle, fills, monogram_colors};
+use crate::style::{self, Fill, Palette, Rgba, Style, TextStyle, fills, monogram_colors};
 
 /// Owns the font, image and layer-sprite caches used for painting.
 #[derive(Debug, Default)]
 pub struct Painter {
+    /// The theme's shapes, fills and type, which layout reads.
+    pub style: Style,
     pub text: TextEngine,
     pub images: ImageCache,
     pub sprites: SpriteCache,
@@ -38,10 +40,18 @@ pub fn physical_size(scene: &Scene, scale: f32) -> (u32, u32) {
 }
 
 impl Painter {
+    /// A painter for the default look.
     #[must_use]
     pub fn new() -> Self {
+        Self::with_style(Style::default())
+    }
+
+    /// A painter whose text follows `style`.
+    #[must_use]
+    pub fn with_style(style: Style) -> Self {
         Self {
-            text: TextEngine::new(),
+            text: TextEngine::with_type(style.text, style.family.as_deref()),
+            style,
             images: ImageCache::new(),
             sprites: SpriteCache::default(),
         }
@@ -241,7 +251,7 @@ impl Painter {
         let (bg, fg) = monogram_colors(fallback.tint);
         let (bg, fg) = (bg.faded(ctx.opacity), fg.faded(ctx.opacity));
         fill_round_rect(pm, rect, radius, bg, scale, mask);
-        let lh = TextStyle::IconLetter.line_height();
+        let lh = self.style.text.line_height(TextStyle::IconLetter);
         let tr = Rect::new(rect.x, rect.y + (rect.h - lh) / 2.0, rect.w, lh);
         self.text.draw(
             &mut pm.as_mut(),
@@ -491,13 +501,13 @@ fn unit_to_u8(v: f32) -> u8 {
     u8::try_from(f32_to_u32((v.clamp(0.0, 1.0) * 255.0).round())).unwrap_or(u8::MAX)
 }
 
-/// Fill and/or 1 px stroke of a rounded rect.
+/// Fill and/or inside stroke of a rounded rect.
 fn shape(
     pm: &mut Pixmap,
     rect: Rect,
     radius: f32,
     fill: Option<Fill>,
-    stroke: Option<Fill>,
+    stroke: Option<style::Stroke>,
     ctx: &Ctx<'_>,
     mask: Option<&Mask>,
 ) {
@@ -505,7 +515,8 @@ fn shape(
         fill_round_rect(pm, rect, radius, ctx.color(f), ctx.scale, mask);
     }
     if let Some(s) = stroke {
-        stroke_round_rect(pm, rect, radius, ctx.color(s), ctx.scale, mask);
+        let width = s.width * ctx.scale;
+        stroke_round_rect(pm, rect, radius, ctx.color(s.fill), width, ctx.scale, mask);
     }
 }
 
@@ -537,19 +548,21 @@ fn fill_round_rect(
     }
 }
 
-/// 1 logical px stroke drawn just inside the shape's edge.
+/// A stroke `width` device px wide (at least one) drawn just inside the
+/// shape's edge.
 fn stroke_round_rect(
     pm: &mut Pixmap,
     rect: Rect,
     radius: f32,
     c: Rgba,
+    width: f32,
     scale: f32,
     mask: Option<&Mask>,
 ) {
-    if c.a <= 0.0 {
+    if c.a <= 0.0 || width <= 0.0 {
         return;
     }
-    let width = scale.max(1.0);
+    let width = width.max(1.0);
     let half = width / 2.0;
     let path = rounded_rect_px(
         rect.x * scale + half,
@@ -714,11 +727,13 @@ mod tests {
     fn render(theme: tidings_core::theme::Theme, scale: f32) -> (Pixmap, Palette) {
         let mut p = painter();
         let palette = Palette::new(theme);
+        let style = p.style.clone();
         let lay = layout_panel(
             &view(),
             Size::new(380.0, 600.0),
             scale,
             &Interaction::default(),
+            &style,
             &mut p.text,
         );
         let pm = p.paint(&lay.scene, &palette, scale);
@@ -830,7 +845,10 @@ mod tests {
             radius: 20.0,
             spread: 9.0,
             offset_y: 3.0,
-            fill: Fill::new(crate::style::Role::Shadow, 0.3),
+            fill: Fill::new(
+                crate::style::Role::Fixed(tidings_core::theme::Rgb(0, 0, 0)),
+                0.3,
+            ),
         });
         let pm = painter()
             .paint(&scene, &Palette::default(), 1.0)

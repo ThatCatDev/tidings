@@ -5,19 +5,19 @@
 //! (⌄) button. Hovering tints the glass and reveals a "×" over the icon.
 //! An expanded toast is laid out like a panel card, with a collapse (⌃)
 //! button in its top-right corner. Both float on their own glass with a soft
-//! drop shadow (see [`crate::style::toast_glass`]).
+//! drop shadow, all styled by the theme (see [`Style`]).
 
 use tidings_core::model::{NotificationId, Urgency};
 use tidings_core::view::{CardView, ToastView};
 
 use crate::geom::{Point, Rect, Size, snap};
 use crate::scene::{Align, GlyphKind, HitTarget, Node, Scene};
-use crate::style::{Fill, Role, TextStyle, fills, metrics as m, toast_glass};
+use crate::style::{Fill, Role, Style, TextStyle, fills, metrics as m};
 use crate::text::{TextFit, TextMeasure};
 
 use super::card::{
-    CardOpts, CardSpec, IconAlign, add_hit, card_radius, close_button, emit_avatar,
-    emit_card_content, measure_card_with,
+    CardOpts, CardSpec, IconAlign, add_hit, close_button, emit_avatar, emit_card_content,
+    measure_card_with,
 };
 
 /// One laid-out toast: a scene sized to the toast plus [`m::TOAST_INSET`] on
@@ -35,6 +35,7 @@ pub fn layout_toast(
     toast: &ToastView,
     scale: f32,
     hovered: Option<&HitTarget>,
+    style: &Style,
     meas: &mut dyn TextMeasure,
 ) -> ToastLayout {
     let c = &toast.card;
@@ -53,14 +54,19 @@ pub fn layout_toast(
     let bounds = Rect::new(inset, inset, m::TOAST_WIDTH, height);
     let mut scene = Scene::new(size);
     let clip = Rect::new(0.0, 0.0, size.w, size.h);
-    let radius = if toast.expanded {
-        card_radius(height)
-    } else {
-        m::TOAST_RADIUS
-    };
-    glass(&mut scene, c, bounds, radius, toast.expanded, is_hovered);
+    let radius = style.toast_radius(height, toast.expanded);
+    glass(
+        &mut scene,
+        style,
+        c,
+        bounds,
+        radius,
+        toast.expanded,
+        is_hovered,
+    );
 
     let opts = CardOpts {
+        style,
         body_target: HitTarget::Activate(c.id),
         close_target: HitTarget::Dismiss(c.id),
         hovered: is_hovered,
@@ -71,6 +77,7 @@ pub fn layout_toast(
             emit_compact(&mut scene, c, lay, origin, &opts, clip);
             chevron_button(
                 &mut scene,
+                style,
                 lay.expand.translate(origin.x, origin.y),
                 &ChevronSpec {
                     kind: GlyphKind::ChevronDown,
@@ -87,6 +94,7 @@ pub fn layout_toast(
             let corner = m::CHEVRON_CORNER_INSET;
             chevron_button(
                 &mut scene,
+                style,
                 Rect::new(bounds.right() - corner - b, bounds.y + corner, b, b),
                 &ChevronSpec {
                     kind: GlyphKind::ChevronUp,
@@ -188,7 +196,7 @@ fn measure_compact(card: &CardView, scale: f32, meas: &mut dyn TextMeasure) -> C
     let time = (!card.time_label.trim().is_empty()).then(|| {
         let max_w = (text_right - text_x) / 2.0;
         let fit = meas.fit(&card.time_label, TextStyle::Time, max_w, 1);
-        let lh = TextStyle::Time.line_height();
+        let lh = meas.line_height(TextStyle::Time);
         let r = Rect::new(
             text_right - fit.width,
             snap((h - lh) / 2.0, scale),
@@ -201,8 +209,8 @@ fn measure_compact(card: &CardView, scale: f32, meas: &mut dyn TextMeasure) -> C
 
     let has_summary = !card.summary.trim().is_empty();
     let has_body = !card.body.trim().is_empty();
-    let sum_h = TextStyle::SummaryLine.line_height();
-    let body_h = TextStyle::BodyLine.line_height();
+    let sum_h = meas.line_height(TextStyle::SummaryLine);
+    let body_h = meas.line_height(TextStyle::BodyLine);
     let block = match (has_summary, has_body) {
         (true, true) => sum_h + m::TOAST_LINE_GAP + body_h,
         (true, false) => sum_h,
@@ -230,23 +238,26 @@ fn measure_compact(card: &CardView, scale: f32, meas: &mut dyn TextMeasure) -> C
 /// The toast's glass: shadow, translucent body, optional sheen, rim.
 fn glass(
     scene: &mut Scene,
+    style: &Style,
     card: &CardView,
     bounds: Rect,
     radius: f32,
     expanded: bool,
     hovered: bool,
 ) {
-    scene.push(Node::Shadow {
-        rect: bounds,
-        radius,
-        spread: toast_glass::SHADOW_SPREAD,
-        offset_y: toast_glass::SHADOW_OFFSET_Y,
-        fill: fills::TOAST_SHADOW,
-    });
+    if let Some(shadow) = style.shadow {
+        scene.push(Node::Shadow {
+            rect: bounds,
+            radius,
+            spread: shadow.spread,
+            offset_y: shadow.offset_y,
+            fill: shadow.fill,
+        });
+    }
     let body = match (expanded, hovered) {
-        (true, _) => fills::TOAST_EXPANDED,
-        (false, true) => fills::TOAST_HOVER,
-        (false, false) => fills::TOAST,
+        (true, _) => style.toast_expanded,
+        (false, true) => style.toast_hover,
+        (false, false) => style.toast,
     };
     scene.push(Node::RoundRect {
         rect: bounds,
@@ -255,16 +266,19 @@ fn glass(
         stroke: None,
     });
     let rim = if card.urgency == Urgency::Critical {
-        fills::CRITICAL_OUTLINE
+        Some(style.critical)
     } else {
-        fills::TOAST_RIM
+        style.toast_border
     };
-    scene.push(Node::RoundRect {
-        rect: bounds,
-        radius,
-        fill: (expanded || hovered).then_some(fills::TOAST_SHEEN),
-        stroke: Some(rim),
-    });
+    let sheen = style.toast_sheen.filter(|_| expanded || hovered);
+    if sheen.is_some() || rim.is_some() {
+        scene.push(Node::RoundRect {
+            rect: bounds,
+            radius,
+            fill: sheen,
+            stroke: rim,
+        });
+    }
 }
 
 fn emit_compact(
@@ -272,7 +286,7 @@ fn emit_compact(
     card: &CardView,
     lay: &CompactLayout,
     origin: Point,
-    opts: &CardOpts,
+    opts: &CardOpts<'_>,
     clip: Rect,
 ) {
     let at = |r: Rect| r.translate(origin.x, origin.y);
@@ -300,7 +314,7 @@ fn emit_compact(
     add_hit(
         scene,
         bounds,
-        m::TOAST_RADIUS,
+        opts.style.toast_radius(m::TOAST_HEIGHT, false),
         opts.body_target.clone(),
         clip,
     );
@@ -317,17 +331,14 @@ struct ChevronSpec {
 /// A round expand/collapse button with a stroke chevron.
 fn chevron_button(
     scene: &mut Scene,
+    style: &Style,
     rect: Rect,
     spec: &ChevronSpec,
     hovered: Option<&HitTarget>,
     clip: Rect,
 ) {
-    let radius = rect.w / 2.0;
-    let fill = if hovered == Some(&spec.target) {
-        fills::PILL_HOVER
-    } else {
-        fills::PILL
-    };
+    let radius = style.button_radius(rect.h);
+    let fill = style.button_fill(hovered == Some(&spec.target));
     scene.push(Node::RoundRect {
         rect,
         radius,
@@ -372,7 +383,7 @@ mod tests {
     }
 
     fn lay(t: &ToastView, hovered: Option<&HitTarget>) -> ToastLayout {
-        layout_toast(t, 1.0, hovered, &mut MonoMeasure)
+        layout_toast(t, 1.0, hovered, &Style::default(), &mut MonoMeasure)
     }
 
     fn hovered() -> HitTarget {
@@ -439,7 +450,9 @@ mod tests {
             assert!(!text.contains('\n'));
             assert!(r.right() <= t.card.right() - m::TOAST_PAD_RIGHT + 0.01);
         }
-        assert!((sum[0].0.h - TextStyle::SummaryLine.line_height()).abs() < f32::EPSILON);
+        assert!(
+            (sum[0].0.h - MonoMeasure.line_height(TextStyle::SummaryLine)).abs() < f32::EPSILON
+        );
         assert!(body[0].0.y > sum[0].0.y, "body under the summary");
         // The icon is a 40 px circle, vertically centred, 9 px in.
         let icon = t.scene.nodes.iter().find_map(|n| match n {
@@ -569,12 +582,15 @@ mod tests {
         let card = measure_card_with(&c, expanded_spec(), 1.0, &mut MonoMeasure);
         assert!((t.card.h - card.height).abs() < f32::EPSILON);
         assert!(t.card.h > 58.0);
-        assert_eq!(body_radius(&t.scene), Some(card_radius(t.card.h)));
-        assert_eq!(body_radius(&t.scene), Some(m::CARD_RADIUS_MAX));
+        assert_eq!(
+            body_radius(&t.scene),
+            Some(Style::default().toast_radius(t.card.h, true))
+        );
+        assert_eq!(body_radius(&t.scene), Some(28.0));
         // Full card content: meta row, a 6-line body, action pills.
         assert_eq!(texts(&t.scene, TextStyle::Meta).len(), 2);
         let body = texts(&t.scene, TextStyle::Body);
-        let lines = body[0].0.h / TextStyle::Body.line_height();
+        let lines = body[0].0.h / MonoMeasure.line_height(TextStyle::Body);
         assert!((lines - 6.0).abs() < 0.01, "{lines}");
         let reply = HitTarget::Action {
             id: ID,
@@ -647,7 +663,7 @@ mod tests {
         c.urgency = Urgency::Critical;
         let t = lay(&toast(c, false), None);
         assert!(t.scene.nodes.iter().any(
-            |n| matches!(n, Node::RoundRect { stroke: Some(s), .. } if *s == fills::CRITICAL_OUTLINE)
+            |n| matches!(n, Node::RoundRect { stroke: Some(s), .. } if *s == Style::default().critical)
         ));
     }
 
@@ -678,13 +694,14 @@ mod tests {
         // Inside the body, clear of text: the glass alpha.
         let body = u32::from(alpha(t.card.right() - 8.0, t.card.center().y));
         assert!(
-            body.abs_diff(to_u8(toast_glass::TOAST_ALPHA)) <= 2,
+            body.abs_diff(to_u8(Style::default().toast.alpha)) <= 2,
             "{body}"
         );
         // Just outside: shadow, visible but below the threshold.
         let shadow = u32::from(alpha(t.card.center().x, t.card.bottom() + 2.0));
         assert!(
-            shadow > 0 && shadow <= to_u8(toast_glass::SHADOW_ALPHA) + 1,
+            shadow > 0
+                && shadow <= to_u8(Style::default().shadow.map_or(0.0, |s| s.fill.alpha)) + 1,
             "{shadow}"
         );
         // Far outside: nothing.

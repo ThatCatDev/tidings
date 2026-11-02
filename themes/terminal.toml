@@ -1,0 +1,56 @@
+# tidings theme: Terminal
+name = "Terminal"
+description = "Gruvbox and a monospace font: square corners, bright yellow borders, no shadow."
+
+[font]
+family = "monospace"
+scale = 0.95
+line_height = 1.35
+
+[palette]
+mode = "dark"
+surface = "#282828"
+surface_variant = "#3c3836"
+on_surface = "#ebdbb2"
+on_surface_variant = "#a89984"
+primary = "#fabd2f"
+on_primary = "#282828"
+error = "#fb4934"
+on_error = "#282828"
+outline = "#665c54"
+
+[panel]
+opacity = 1.0
+radius = 0
+border_width = 2
+border_color = "primary"
+border_opacity = 0.8
+blur = false
+
+[card]
+radius = 0
+color = "surface_variant"
+opacity = 1.0
+hover_opacity = 0.7
+border_color = "outline"
+border_opacity = 0.9
+
+[toast]
+radius = 0
+opacity = 1.0
+hover_opacity = 1.0
+expanded_opacity = 1.0
+sheen = 0.04
+border_width = 2
+border_color = "primary"
+border_opacity = 0.9
+blur = false
+
+[shadow]
+opacity = 0
+
+[button]
+radius = 0
+color = "outline"
+opacity = 0.6
+hover_opacity = 1.0

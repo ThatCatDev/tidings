@@ -94,7 +94,13 @@ impl ToastStack {
             };
             let key = (scale.to_bits(), hovered.clone());
             if item.rendered.as_ref() != Some(&key) {
-                item.layout = layout_toast(t, scale, hovered.as_ref(), &mut painter.text);
+                item.layout = layout_toast(
+                    t,
+                    scale,
+                    hovered.as_ref(),
+                    &painter.style,
+                    &mut painter.text,
+                );
                 item.pixmap = painter.paint(&item.layout.scene, palette, scale);
                 item.rendered = Some(key);
             }
@@ -129,7 +135,7 @@ impl ToastStack {
     ) -> Item {
         Item {
             view: t.clone(),
-            layout: layout_toast(t, scale, hovered, &mut painter.text),
+            layout: layout_toast(t, scale, hovered, &painter.style, &mut painter.text),
             pixmap: None,
             rendered: None,
             target_y: 0.0,
@@ -276,7 +282,7 @@ mod tests {
             crate::geom::f32_to_u32(top.y),
         );
         // The toast's glass is painted there (text may add to it, never less).
-        let glass = crate::style::toast_glass::TOAST_ALPHA * 255.0 * 0.9;
+        let glass = crate::style::Style::default().toast.alpha * 255.0 * 0.9;
         assert!(
             frame
                 .pixel(cx, cy)

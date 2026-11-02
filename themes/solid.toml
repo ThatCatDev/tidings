@@ -1,0 +1,33 @@
+# tidings theme: Solid
+name = "Solid"
+description = "Opaque surfaces in your Noctalia colours, rounded but not pills."
+
+[panel]
+opacity = 1.0
+radius = 18
+border_opacity = 0.22
+blur = false
+
+[card]
+radius = 18
+opacity = 0.07
+hover_opacity = 0.12
+border_opacity = 0.05
+
+[toast]
+radius = 18
+opacity = 1.0
+hover_opacity = 1.0
+expanded_opacity = 1.0
+sheen = 0.04
+border_color = "outline"
+border_opacity = 0.22
+blur = false
+
+[shadow]
+opacity = 0.4
+size = 10
+offset = 2
+
+[button]
+radius = 10

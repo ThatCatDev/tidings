@@ -36,6 +36,24 @@ enabled = true
 speed = 1.0
 
 [theme]
+# The look: a built-in theme (glass, frosted, clear, solid, flat, paper,
+# nord, mocha, terminal) or a file in ~/.config/tidings/themes/.
+# See `tidings theme list`.
+# name = "glass"
+#
 # Colours file written by the Noctalia hook. Default:
 # ~/.config/tidings/colors.json ($TIDINGS_COLORS still wins).
 # colors = "~/.config/tidings/colors.json"
+
+# Any theme setting can be changed here too, in sections named after the
+# theme file's: [theme.font], [theme.palette], [theme.panel], [theme.card],
+# [theme.toast], [theme.shadow] and [theme.button]. `tidings theme show glass`
+# lists every setting. For example:
+#
+# [theme.panel]
+# radius = 12
+# border_width = 2
+#
+# [theme.font]
+# family = "Inter"
+# line_height = 1.4

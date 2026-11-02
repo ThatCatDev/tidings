@@ -3,10 +3,10 @@
 //! Loaded from `~/.config/tidings/colors.json` (written by the Noctalia hook
 //! script). Keys are camelCase versions of the fields; colours are `#rrggbb`.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Rgb(pub u8, pub u8, pub u8);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Mode {
     #[default]
     Dark,

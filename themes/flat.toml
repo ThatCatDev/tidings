@@ -1,0 +1,38 @@
+# tidings theme: Flat
+name = "Flat"
+description = "Minimal: opaque, small corners, hairline borders and no shadow."
+
+[font]
+line_height = 1.25
+
+[panel]
+opacity = 1.0
+radius = 6
+border_opacity = 0.3
+blur = false
+
+[card]
+radius = 6
+color = "surface_variant"
+opacity = 1.0
+hover_opacity = 1.0
+border_width = 0
+
+[toast]
+radius = 6
+color = "surface_variant"
+opacity = 1.0
+hover_opacity = 1.0
+expanded_opacity = 1.0
+sheen = 0.05
+border_color = "outline"
+border_opacity = 0.3
+blur = false
+
+[shadow]
+opacity = 0
+
+[button]
+radius = 4
+opacity = 0.08
+hover_opacity = 0.15

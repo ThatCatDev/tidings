@@ -71,7 +71,7 @@ Settings live in `~/.config/tidings/config.toml` (override the path with `TIDING
 - **Toasts:** timeouts for each urgency and the number shown at once.
 - **Gestures:** on or off, edge zone, swipe distance and flick speed.
 - **Animation:** on or off, and speed.
-- **Theme:** the colours file path.
+- **Theme:** which theme, overrides of any of its settings, and the colours file path.
 
 ```sh
 tidings config default > ~/.config/tidings/config.toml   # start from the template
@@ -81,7 +81,51 @@ tidings config path                                       # where tidings looks
 
 The file is type-checked. Unknown keys, wrong types, malformed durations (`"4s"`, `"250ms"`) and out-of-range numbers are errors, reported as `file:line:column: key: message`. If the file is invalid, the daemon logs the errors and starts with the defaults. Changes apply when tidings restarts.
 
-### Theme
+### Themes
+
+A theme sets the look: corner radius, border width, colour and opacity, transparency, blur, shadow, font, text size and line height. Nine are built in:
+
+| theme | look |
+|---|---|
+| `glass` (default) | Frosted, translucent and pill-shaped, like the macOS Notification Centre. |
+| `frosted` | Thicker, milkier glass: more opaque, softer rims, rounder corners. |
+| `clear` | Barely-there glass held together by crisp light rims. |
+| `solid` | Opaque surfaces in your Noctalia colours, rounded but not pills. |
+| `flat` | Minimal: opaque, small corners, hairline borders and no shadow. |
+| `paper` | Light, warm off-white paper with a terracotta accent and soft shadows. |
+| `nord` | Glass in the Nord palette: polar night surfaces, frost-blue accents. |
+| `mocha` | Catppuccin Mocha: deep base, mauve accents, soft lavender rims. |
+| `terminal` | Gruvbox and a monospace font: square corners, bright yellow borders, no shadow. |
+
+Pick one in `config.toml`, and change any of its settings right there:
+
+```toml
+[theme]
+name = "nord"
+
+[theme.panel]
+radius = 12
+border_width = 2
+
+[theme.font]
+line_height = 1.4
+```
+
+To make your own, put a file in `~/.config/tidings/themes/` (`tidings theme path`). A file with a built-in's name replaces it. [`themes/glass.toml`](themes/glass.toml) documents every setting at its default; a theme only needs the keys it changes.
+
+```sh
+tidings theme list                        # * marks the one in use
+tidings theme show glass > ~/.config/tidings/themes/mine.toml
+tidings theme check mine                  # or a path to a .toml file
+```
+
+Theme files are checked like the config. A broken theme is logged and `glass` is used instead.
+
+Colours are `#rrggbb` or a slot of the colour scheme (`surface`, `surface_variant`, `on_surface`, `on_surface_variant`, `primary`, `on_primary`, `error`, `outline`, or `tint`), and slots follow Noctalia. A theme's `[palette]` replaces colours from `colors.json` outright.
+
+Blur is drawn by Hyprland. With `blur = true` the surfaces use the `tidings-panel` and `tidings-toast` layer namespaces, and with `blur = false` they use `tidings-panel-noblur` and `tidings-toast-noblur`. Hyprland skips pixels below a layer rule's `ignore_alpha`, so keep blurred opacities above it and the toast shadow below it.
+
+### Colours
 
 The colours come from `~/.config/tidings/colors.json`. Override the path with `TIDINGS_COLORS` or the config's `theme.colors`. tidings watches the file and applies changes live. With [Noctalia](https://noctalia.dev), have its `colors_changed` hook run `tidings-noctalia-colors`, and tidings follows your wallpaper palette.
 
@@ -103,6 +147,7 @@ cargo clippy --workspace --all-targets -- -D warnings   # clippy::pedantic
 cargo test --workspace          # unit + integration (private dbus-daemon, never the session bus)
 sh tests/colors.sh              # the Noctalia colours script
 cargo run -p tidings-ui --example demo --release        # UI demo on the live compositor
+cargo run -p tidings-ui --example demo --release -- themes DIR   # render every theme to PNGs
 ```
 
 ## Releases

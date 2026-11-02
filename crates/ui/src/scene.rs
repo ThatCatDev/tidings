@@ -9,7 +9,7 @@ use tidings_core::model::{Image, NotificationId};
 use tidings_core::ui::UiEvent;
 
 use crate::geom::{Point, Rect, Size};
-use crate::style::{Fill, TextStyle};
+use crate::style::{Fill, Stroke, TextStyle};
 
 /// Horizontal text alignment inside a text node's rect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,12 +43,12 @@ pub struct Monogram {
 /// One drawing primitive.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Node {
-    /// Rounded rectangle, optionally with a 1 px inside stroke.
+    /// Rounded rectangle, optionally with an inside stroke.
     RoundRect {
         rect: Rect,
         radius: f32,
         fill: Option<Fill>,
-        stroke: Option<Fill>,
+        stroke: Option<Stroke>,
     },
     /// A stacked-group "sheet": a rounded rect with the card in front of it
     /// (`cutout`) cut away, so translucent fills never double up.
@@ -56,7 +56,7 @@ pub enum Node {
         rect: Rect,
         radius: f32,
         fill: Fill,
-        stroke: Option<Fill>,
+        stroke: Option<Stroke>,
         cutout: Rect,
         cutout_radius: f32,
     },
@@ -76,7 +76,7 @@ pub enum Node {
         center: Point,
         radius: f32,
         fill: Fill,
-        stroke: Option<Fill>,
+        stroke: Option<Stroke>,
     },
     /// Pre-fitted text (see [`crate::text::TextMeasure::fit`]).
     Text {

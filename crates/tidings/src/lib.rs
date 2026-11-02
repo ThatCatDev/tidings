@@ -11,3 +11,4 @@ pub mod dbus;
 pub mod ipc;
 pub mod null_ui;
 pub mod theme_watch;
+pub mod themes;

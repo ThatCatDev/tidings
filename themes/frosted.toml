@@ -1,0 +1,32 @@
+# tidings theme: Frosted
+name = "Frosted"
+description = "Thicker, milkier glass: more opaque, softer rims, rounder corners."
+
+[panel]
+opacity = 0.82
+radius = 26
+border_color = "tint"
+border_opacity = 0.14
+
+[card]
+radius = 24
+opacity = 0.10
+hover_opacity = 0.16
+border_opacity = 0.10
+
+[toast]
+radius = 24
+opacity = 0.72
+hover_opacity = 0.78
+expanded_opacity = 0.76
+sheen = 0.06
+border_opacity = 0.12
+
+[shadow]
+opacity = 0.3
+size = 10
+offset = 2
+
+[button]
+opacity = 0.13
+hover_opacity = 0.21

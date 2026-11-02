@@ -1,0 +1,39 @@
+# tidings theme: Nord
+name = "Nord"
+description = "Glass in the Nord palette: polar night surfaces, frost-blue accents."
+
+[palette]
+mode = "dark"
+surface = "#2e3440"
+surface_variant = "#3b4252"
+on_surface = "#eceff4"
+on_surface_variant = "#a9b3c5"
+primary = "#88c0d0"
+on_primary = "#2e3440"
+error = "#bf616a"
+on_error = "#2e3440"
+outline = "#81a1c1"
+
+[panel]
+opacity = 0.74
+radius = 18
+border_opacity = 0.3
+
+[card]
+radius = 20
+border_color = "primary"
+border_opacity = 0.1
+
+[toast]
+radius = 22
+opacity = 0.62
+hover_opacity = 0.7
+expanded_opacity = 0.66
+border_color = "primary"
+border_opacity = 0.28
+
+[button]
+radius = 12
+color = "primary"
+opacity = 0.14
+hover_opacity = 0.24

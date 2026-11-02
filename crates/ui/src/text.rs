@@ -5,7 +5,7 @@
 //! ([`crate::render::TextEngine`]); tests use [`MonoMeasure`], a deterministic
 //! fixed-advance fake.
 
-use crate::style::TextStyle;
+use crate::style::{TextStyle, Type};
 
 /// Result of fitting text into a box.
 #[derive(Debug, Clone, PartialEq)]
@@ -25,6 +25,9 @@ pub trait TextMeasure {
     /// Fits `text` into `max_width`, wrapping at word boundaries and
     /// clamping to `max_lines` with a trailing ellipsis.
     fn fit(&mut self, text: &str, style: TextStyle, max_width: f32, max_lines: u32) -> TextFit;
+
+    /// Height of one line of `style`, in logical px.
+    fn line_height(&self, style: TextStyle) -> f32;
 }
 
 /// Normalises text before shaping: trims, and for single-line styles folds
@@ -64,13 +67,14 @@ pub fn ellipsize(text: &str, mut fits: impl FnMut(&str) -> bool) -> String {
     candidate(lo)
 }
 
-/// Deterministic fake: every char advances `0.5 * size`, greedy word wrap.
+/// Deterministic fake at the default type: every char advances
+/// `0.5 * size`, greedy word wrap.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct MonoMeasure;
 
 impl MonoMeasure {
     fn advance(style: TextStyle) -> f32 {
-        style.size() * 0.5
+        Type::default().size(style) * 0.5
     }
 
     /// Greedy word-wrap returning line widths.
@@ -111,10 +115,14 @@ impl TextMeasure for MonoMeasure {
         let n = u32::try_from(lines.len()).unwrap_or(u32::MAX);
         TextFit {
             width: lines.iter().copied().fold(0.0, f32::max).min(max_width),
-            height: crate::geom::u32_to_f32(n) * style.line_height(),
+            height: crate::geom::u32_to_f32(n) * self.line_height(style),
             lines: n,
             text,
         }
+    }
+
+    fn line_height(&self, style: TextStyle) -> f32 {
+        Type::default().line_height(style)
     }
 }
 
@@ -143,7 +151,7 @@ mod tests {
         let fit = m.fit("aaaa bbbb cccc dddd eeee", TextStyle::Body, 65.0, 2);
         assert_eq!(fit.lines, 2);
         assert!(fit.text.ends_with('…'));
-        assert!((fit.height - 2.0 * TextStyle::Body.line_height()).abs() < 1e-3);
+        assert!((fit.height - 2.0 * m.line_height(TextStyle::Body)).abs() < 1e-3);
         let fit = m.fit("short", TextStyle::Body, 65.0, 2);
         assert_eq!(fit.text, "short");
         assert_eq!(fit.lines, 1);

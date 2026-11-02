@@ -28,6 +28,11 @@ pub enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+    /// List, show and check themes.
+    Theme {
+        #[command(subcommand)]
+        command: ThemeCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -39,6 +44,21 @@ pub enum ConfigCommand {
     /// Print a commented config file with every setting at its default.
     Default,
     /// Print where tidings looks for its config file.
+    Path,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ThemeCommand {
+    /// List the themes: built-in ones and files in the themes folder.
+    List,
+    /// Print a theme's file (to copy into the themes folder and edit).
+    Show { name: String },
+    /// Check a theme for errors: a name, or a path to a .toml file
+    /// (default: the theme the config chooses).
+    ///
+    /// Exit codes: 0 valid, 1 invalid or not found.
+    Check { theme: Option<String> },
+    /// Print the folder tidings reads theme files from.
     Path,
 }
 

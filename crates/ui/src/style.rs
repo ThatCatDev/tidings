@@ -1,9 +1,11 @@
-//! Visual constants and the theme → colour mapping.
+//! Visual constants, the theme's [`Style`], and the colour mapping.
 //!
 //! Layout refers to colours by [`Role`] (plus an alpha), never by value, so a
-//! theme change only needs a repaint, not a re-layout. [`Palette`] resolves
-//! roles against the current [`Theme`].
+//! colour change only needs a repaint, not a re-layout. [`Palette`] resolves
+//! roles against the current [`Theme`]. Shapes, borders, opacities and type
+//! come from the user's theme ([`Look`]) as a [`Style`], fixed for the run.
 
+use tidings_core::look::{Border, Look, Paint, SHADOW_ROOM};
 use tidings_core::theme::{Mode, Rgb, Theme};
 
 /// Logical-pixel metrics for the panel, cards and toasts.
@@ -15,15 +17,10 @@ pub mod metrics {
     pub const PANEL_MARGIN_RIGHT: f32 = 8.0;
     pub const PANEL_MARGIN_TOP: i32 = 52;
     pub const PANEL_MARGIN_BOTTOM: i32 = 8;
-    pub const PANEL_RADIUS: f32 = 20.0;
     /// Inset of the card column inside the panel.
     pub const PANEL_PADDING: f32 = 12.0;
     pub const HEADER_HEIGHT: f32 = 56.0;
 
-    /// Cards are pills: corner radius is half the card height, capped here so
-    /// a tall card reads as a card with generous corners, not a lozenge. See
-    /// [`crate::layout::card::card_radius`].
-    pub const CARD_RADIUS_MAX: f32 = 28.0;
     pub const CARD_PADDING: f32 = 12.0;
     pub const CARD_GAP: f32 = 10.0;
     pub const ICON_SIZE: f32 = 36.0;
@@ -52,8 +49,7 @@ pub mod metrics {
     /// Span of the "×" cross as a fraction of its button's radius.
     pub const CLOSE_GLYPH: f32 = 0.5;
     /// Close-button centre offset from a card's top-left corner.
-    /// Far enough in that the button's centre stays inside a
-    /// [`CARD_RADIUS_MAX`] corner.
+    /// Far enough in that the button's centre stays inside a 28 px corner.
     pub const CLOSE_OFFSET: f32 = 10.0;
 
     /// Visible strip of each stacked "sheet" below a collapsed group.
@@ -72,7 +68,7 @@ pub mod metrics {
     pub const TOAST_INSET: f32 = 12.0;
     /// A collapsed toast is a fixed-height pill, whatever its text.
     pub const TOAST_HEIGHT: f32 = 58.0;
-    /// Half the height: a true pill.
+    /// Half the height: the most a collapsed toast can be rounded.
     pub const TOAST_RADIUS: f32 = TOAST_HEIGHT / 2.0;
     /// Round icon of a collapsed toast, vertically centred.
     pub const TOAST_ICON_SIZE: f32 = 40.0;
@@ -111,8 +107,9 @@ pub mod metrics {
     pub const SUMMARY_LINES: u32 = 2;
 }
 
-/// Named text styles. Sizes and weights live here so layout and the text
-/// engine agree, and so styles can be hashed for the shaping cache.
+/// Named text styles. Base sizes and weights live here so layout and the
+/// text engine agree, and so styles can be hashed for the shaping cache; the
+/// theme's [`Type`] scales them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TextStyle {
     /// "Notifications".
@@ -147,9 +144,9 @@ pub enum Weight {
 }
 
 impl TextStyle {
-    /// Font size in logical pixels.
+    /// Font size in logical pixels before the theme's scale.
     #[must_use]
-    pub fn size(self) -> f32 {
+    pub fn base_size(self) -> f32 {
         match self {
             Self::Title | Self::IconLetter => 16.0,
             Self::Meta | Self::Button => 12.0,
@@ -158,12 +155,6 @@ impl TextStyle {
             Self::Time => 11.5,
             Self::Empty => 15.0,
         }
-    }
-
-    /// Line height in logical pixels.
-    #[must_use]
-    pub fn line_height(self) -> f32 {
-        (self.size() * 1.3).round()
     }
 
     #[must_use]
@@ -193,10 +184,44 @@ impl TextStyle {
     }
 }
 
+/// Text sizes and line spacing for the theme's typography.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Type {
+    /// Multiplies every [`TextStyle::base_size`].
+    pub scale: f32,
+    /// Line spacing as a multiple of the size.
+    pub line_height: f32,
+}
+
+impl Default for Type {
+    fn default() -> Self {
+        let t = tidings_core::look::Typography::default();
+        Self {
+            scale: t.scale,
+            line_height: t.line_height,
+        }
+    }
+}
+
+impl Type {
+    /// Font size in logical pixels.
+    #[must_use]
+    pub fn size(self, style: TextStyle) -> f32 {
+        style.base_size() * self.scale
+    }
+
+    /// Line height in logical pixels (whole pixels, so rows stay crisp).
+    #[must_use]
+    pub fn line_height(self, style: TextStyle) -> f32 {
+        (self.size(style) * self.line_height).round()
+    }
+}
+
 /// A colour slot resolved against the theme at paint time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Role {
     Surface,
+    SurfaceVariant,
     OnSurface,
     OnSurfaceVariant,
     Primary,
@@ -205,11 +230,28 @@ pub enum Role {
     Outline,
     /// Lightening tint for cards: `on_surface` in dark mode, white in light.
     Tint,
-    /// Pure black, for drop shadows.
-    Shadow,
     /// Glass background: `surface` at the theme's `surface_alpha` (times the
     /// fill alpha).
     Glass,
+    /// A colour that does not follow the theme.
+    Fixed(Rgb),
+}
+
+impl From<Paint> for Role {
+    fn from(p: Paint) -> Self {
+        match p {
+            Paint::Surface => Self::Surface,
+            Paint::SurfaceVariant => Self::SurfaceVariant,
+            Paint::OnSurface => Self::OnSurface,
+            Paint::OnSurfaceVariant => Self::OnSurfaceVariant,
+            Paint::Primary => Self::Primary,
+            Paint::OnPrimary => Self::OnPrimary,
+            Paint::Error => Self::Error,
+            Paint::Outline => Self::Outline,
+            Paint::Tint => Self::Tint,
+            Paint::Fixed(rgb) => Self::Fixed(rgb),
+        }
+    }
 }
 
 /// A role plus opacity: what layout asks the painter to use.
@@ -231,82 +273,202 @@ impl Fill {
     }
 }
 
-/// Fills used by layout, collected so the look is tuned in one place.
+/// An outline drawn just inside a shape's edge.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Stroke {
+    pub fill: Fill,
+    /// Logical pixels.
+    pub width: f32,
+}
+
+impl Stroke {
+    /// A one-pixel outline.
+    #[must_use]
+    pub const fn hairline(fill: Fill) -> Self {
+        Self { fill, width: 1.0 }
+    }
+
+    /// A theme border, or `None` when it would not show.
+    #[must_use]
+    pub fn from_border(b: Border) -> Option<Self> {
+        (b.width > 0.0 && b.opacity > 0.0).then(|| Self {
+            fill: Fill::new(b.paint.into(), b.opacity),
+            width: b.width,
+        })
+    }
+}
+
+/// Fills that do not change with the theme.
 pub mod fills {
-    use super::{Fill, Role};
+    use super::{Fill, Role, Stroke};
 
     /// Ring behind an avatar badge: the surface colour, so the badge reads as
     /// sitting on top of the avatar on any glass.
     pub const BADGE_RING: Fill = Fill::new(Role::Surface, 0.95);
     /// Round plate behind an icon drawn inset in its avatar.
     pub const ICON_PLATE: Fill = Fill::new(Role::Tint, 0.14);
-    pub const CARD: Fill = Fill::new(Role::Tint, 0.075);
-    pub const CARD_HOVER: Fill = Fill::new(Role::Tint, 0.11);
-    pub const SHEET_1: Fill = Fill::new(Role::Tint, 0.07);
-    pub const SHEET_2: Fill = Fill::new(Role::Tint, 0.05);
-    pub const PILL: Fill = Fill::new(Role::Tint, 0.10);
-    pub const PILL_HOVER: Fill = Fill::new(Role::Tint, 0.17);
+    /// A toggled-on pill (Do Not Disturb).
     pub const PILL_ON: Fill = Fill::solid(Role::Primary);
-    pub const OUTLINE: Fill = Fill::new(Role::Outline, 0.35);
-    pub const CARD_OUTLINE: Fill = Fill::new(Role::Tint, 0.06);
-    pub const CRITICAL_OUTLINE: Fill = Fill::new(Role::Error, 0.7);
     pub const CLOSE_BG: Fill = Fill::new(Role::Surface, 0.96);
     pub const CLOSE_BG_HOVER: Fill = Fill::solid(Role::Surface);
-    pub const CLOSE_RING: Fill = Fill::new(Role::Outline, 0.4);
+    pub const CLOSE_RING: Stroke = Stroke::hairline(Fill::new(Role::Outline, 0.4));
+    /// The panel sheet: the surface at the theme's glass opacity.
     pub const GLASS: Fill = Fill::solid(Role::Glass);
-
-    use super::toast_glass as g;
-    pub const TOAST: Fill = Fill::new(Role::Surface, g::TOAST_ALPHA);
-    pub const TOAST_HOVER: Fill = Fill::new(Role::Surface, g::TOAST_HOVER_ALPHA);
-    pub const TOAST_EXPANDED: Fill = Fill::new(Role::Surface, g::TOAST_EXPANDED_ALPHA);
-    /// Lightening sheen over a hovered or expanded toast's glass.
-    pub const TOAST_SHEEN: Fill = Fill::new(Role::Tint, g::TOAST_SHEEN_ALPHA);
-    pub const TOAST_RIM: Fill = Fill::new(Role::Tint, g::TOAST_RIM_ALPHA);
-    pub const TOAST_SHADOW: Fill = Fill::new(Role::Shadow, g::SHADOW_ALPHA);
     /// "There are actions inside" dot on a toast's expand button.
     pub const ACTIONS_DOT: Fill = Fill::solid(Role::Primary);
 }
 
-/// Toast glass: much more transparent than the panel, because Hyprland blurs
-/// what is behind it.
-///
-/// Hyprland's layer rule `ignore_alpha = T` blurs only behind pixels whose
-/// alpha is above `T`. The toast surface holds two kinds of translucent
-/// pixels: the glass body (at least [`TOAST_ALPHA`]) and the soft drop
-/// shadow around it (at most [`SHADOW_ALPHA`]). Setting `T` between the two
-/// (`SHADOW_ALPHA < T < TOAST_ALPHA`, e.g. 0.4) blurs behind the body but not
-/// behind the shadow, which would otherwise show as a blurred halo. Keep that
-/// gap when tuning these values. The shadow is cut out under the body, so it
-/// never adds to the body's alpha.
-pub mod toast_glass {
-    /// A resting collapsed toast; the lowest body alpha on the surface.
-    pub const TOAST_ALPHA: f32 = 0.46;
-    /// A hovered collapsed toast (≈ 0.56 once the sheen is on top).
-    pub const TOAST_HOVER_ALPHA: f32 = 0.54;
-    /// An expanded toast (≈ 0.52 once the sheen is on top).
-    pub const TOAST_EXPANDED_ALPHA: f32 = 0.50;
-    /// Tint layered over hovered/expanded glass so it reads lighter, not
-    /// just more opaque.
-    pub const TOAST_SHEEN_ALPHA: f32 = 0.04;
-    /// The 1 px light rim around every toast.
-    pub const TOAST_RIM_ALPHA: f32 = 0.16;
-    /// Opacity of the (unblurred) shadow shape; the soft shadow is at most
-    /// half this at the toast's edge. Must stay below Hyprland's
-    /// `ignore_alpha` (and so below [`TOAST_ALPHA`]).
-    pub const SHADOW_ALPHA: f32 = 0.28;
-    /// How far the shadow fades out beyond the toast's edge (logical px):
-    /// three standard deviations of its blur.
-    pub const SHADOW_SPREAD: f32 = 9.0;
-    /// Downward shift of the shadow (logical px).
-    pub const SHADOW_OFFSET_Y: f32 = 3.0;
-
-    // The ignore_alpha gap, and the shadow fitting inside the toast inset.
-    const _: () = assert!(SHADOW_ALPHA < 0.35 && SHADOW_ALPHA + 0.1 < TOAST_ALPHA);
-    const _: () = assert!(
-        SHADOW_SPREAD + SHADOW_OFFSET_Y <= super::metrics::TOAST_INSET
-            && super::metrics::TOAST_INSET <= super::metrics::TOAST_MARGIN_RIGHT
-    );
+/// A toast's soft drop shadow.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ShadowStyle {
+    /// Colour and opacity of the unblurred shape.
+    pub fill: Fill,
+    /// How far it fades out beyond the toast (three standard deviations).
+    pub spread: f32,
+    /// Downward shift.
+    pub offset_y: f32,
 }
+
+/// Everything layout needs from the theme, resolved from a [`Look`]: radii,
+/// fills, borders, the shadow and type. Colours stay [`Role`]s, so a colour
+/// change still only needs a repaint.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Style {
+    pub text: Type,
+    /// Font family the user asked for (`None`: the system UI font).
+    pub family: Option<String>,
+
+    pub panel_radius: f32,
+    pub glass: Fill,
+    pub panel_border: Option<Stroke>,
+    /// Ask the compositor to blur behind the panel.
+    pub panel_blur: bool,
+
+    card_radius: f32,
+    pub card: Fill,
+    pub card_hover: Fill,
+    /// The sheets peeking below a collapsed stack, nearest first.
+    pub sheets: [Fill; 2],
+    pub card_border: Option<Stroke>,
+    /// Outline of a critical notification's card or toast.
+    pub critical: Stroke,
+
+    toast_radius: f32,
+    pub toast: Fill,
+    pub toast_hover: Fill,
+    pub toast_expanded: Fill,
+    /// Lightening tint over a hovered or expanded toast.
+    pub toast_sheen: Option<Fill>,
+    pub toast_border: Option<Stroke>,
+    pub shadow: Option<ShadowStyle>,
+    /// Ask the compositor to blur behind toasts.
+    pub toast_blur: bool,
+
+    button_radius: f32,
+    pub button: Fill,
+    pub button_hover: Fill,
+}
+
+impl Style {
+    #[must_use]
+    pub fn new(look: &Look) -> Self {
+        let card_role = Role::from(look.card.paint);
+        let card = Fill::new(card_role, look.card.opacity);
+        let toast_role = Role::from(look.toast.paint);
+        let shadow = look.toast.shadow;
+        let critical_width = look.card.border.width.max(look.toast.border.width).max(1.0);
+        Self {
+            text: Type {
+                scale: look.font.scale,
+                line_height: look.font.line_height,
+            },
+            family: look.font.family.clone(),
+
+            panel_radius: look.panel.radius,
+            glass: fills::GLASS,
+            panel_border: Stroke::from_border(look.panel.border),
+            panel_blur: look.panel.blur,
+
+            card_radius: look.card.radius,
+            card,
+            card_hover: Fill::new(card_role, look.card.hover_opacity),
+            // Each sheet a little fainter than the card in front of it.
+            sheets: [
+                Fill::new(card_role, card.alpha * 0.93),
+                Fill::new(card_role, card.alpha * 0.67),
+            ],
+            card_border: Stroke::from_border(look.card.border),
+            critical: Stroke {
+                fill: Fill::new(Role::Error, 0.7),
+                width: critical_width,
+            },
+
+            toast_radius: look.toast.radius,
+            toast: Fill::new(toast_role, look.toast.opacity),
+            toast_hover: Fill::new(toast_role, look.toast.hover_opacity),
+            toast_expanded: Fill::new(toast_role, look.toast.expanded_opacity),
+            toast_sheen: (look.toast.sheen > 0.0).then(|| Fill::new(Role::Tint, look.toast.sheen)),
+            toast_border: Stroke::from_border(look.toast.border),
+            shadow: (shadow.opacity > 0.0 && shadow.size + shadow.offset > 0.0).then(|| {
+                // Never past the room left around each toast.
+                let spread = shadow.size.min(SHADOW_ROOM);
+                ShadowStyle {
+                    fill: Fill::new(shadow.paint.into(), shadow.opacity),
+                    spread,
+                    offset_y: shadow.offset.min(SHADOW_ROOM - spread),
+                }
+            }),
+            toast_blur: look.toast.blur,
+
+            button_radius: look.button.radius,
+            button: Fill::new(look.button.paint.into(), look.button.opacity),
+            button_hover: Fill::new(look.button.paint.into(), look.button.hover_opacity),
+        }
+    }
+
+    /// Corner radius for a card of `height`: a pill while it is short,
+    /// capped at the theme's card radius.
+    #[must_use]
+    pub fn card_radius(&self, height: f32) -> f32 {
+        (height / 2.0).min(self.card_radius)
+    }
+
+    /// Corner radius for a toast of `height`. An expanded toast is shaped
+    /// like a card, and is never rounder than one.
+    #[must_use]
+    pub fn toast_radius(&self, height: f32, expanded: bool) -> f32 {
+        let r = (height / 2.0).min(self.toast_radius);
+        if expanded { r.min(self.card_radius) } else { r }
+    }
+
+    /// Corner radius for a button of `height`.
+    #[must_use]
+    pub fn button_radius(&self, height: f32) -> f32 {
+        (height / 2.0).min(self.button_radius)
+    }
+
+    /// A button's fill.
+    #[must_use]
+    pub fn button_fill(&self, hovered: bool) -> Fill {
+        if hovered {
+            self.button_hover
+        } else {
+            self.button
+        }
+    }
+}
+
+impl Default for Style {
+    /// The default ("glass") look.
+    fn default() -> Self {
+        Self::new(&Look::default())
+    }
+}
+
+// The shadow fits in the toast inset, which lives inside the screen-edge gap.
+const _: () = assert!(
+    SHADOW_ROOM <= metrics::TOAST_INSET && metrics::TOAST_INSET <= metrics::TOAST_MARGIN_RIGHT
+);
 
 /// Pastel `(background, letter)` pairs for letter-tile avatars, one picked
 /// per app (see [`crate::layout::card::monogram`]). Fixed rather than themed:
@@ -381,7 +543,7 @@ impl Palette {
         &self.theme
     }
 
-    /// Glass background alpha for the panel and toasts, clamped to 0..=1.
+    /// Glass background alpha for the panel, clamped to 0..=1.
     #[must_use]
     pub fn surface_alpha(&self) -> f32 {
         self.theme.surface_alpha.clamp(0.0, 1.0)
@@ -389,21 +551,19 @@ impl Palette {
 
     #[must_use]
     pub fn rgb(&self, role: Role) -> Rgb {
-        let t = &self.theme;
-        match role {
-            Role::Surface | Role::Glass => t.surface,
-            Role::OnSurface => t.on_surface,
-            Role::OnSurfaceVariant => t.on_surface_variant,
-            Role::Primary => t.primary,
-            Role::OnPrimary => t.on_primary,
-            Role::Error => t.error,
-            Role::Outline => t.outline,
-            Role::Shadow => Rgb(0, 0, 0),
-            Role::Tint => match t.mode {
-                Mode::Dark => t.on_surface,
-                Mode::Light => Rgb(255, 255, 255),
-            },
-        }
+        let paint = match role {
+            Role::Surface | Role::Glass => Paint::Surface,
+            Role::SurfaceVariant => Paint::SurfaceVariant,
+            Role::OnSurface => Paint::OnSurface,
+            Role::OnSurfaceVariant => Paint::OnSurfaceVariant,
+            Role::Primary => Paint::Primary,
+            Role::OnPrimary => Paint::OnPrimary,
+            Role::Error => Paint::Error,
+            Role::Outline => Paint::Outline,
+            Role::Tint => Paint::Tint,
+            Role::Fixed(rgb) => Paint::Fixed(rgb),
+        };
+        paint.resolve(&self.theme)
     }
 
     /// Resolves a fill to a straight-alpha colour.
@@ -457,6 +617,9 @@ pub fn default_theme() -> Theme {
 
 #[cfg(test)]
 mod tests {
+    use tidings_core::config::theme::{BUILTIN, ThemeFile};
+
+    use super::metrics as m;
     use super::*;
 
     #[test]
@@ -465,6 +628,7 @@ mod tests {
         let c = p.resolve(Fill::new(Role::Primary, 0.5));
         assert!((c.r - f32::from(0x9f_u8) / 255.0).abs() < 1e-6);
         assert!((c.a - 0.5).abs() < 1e-6);
+        assert_eq!(p.rgb(Role::Fixed(Rgb(1, 2, 3))), Rgb(1, 2, 3));
     }
 
     #[test]
@@ -477,7 +641,8 @@ mod tests {
         theme.mode = Mode::Light;
         let p = Palette::new(theme);
         assert_eq!(p.rgb(Role::Tint), Rgb(255, 255, 255));
-        assert!(p.resolve(fills::CARD).a > fills::CARD.alpha);
+        let card = Style::default().card;
+        assert!(p.resolve(card).a > card.alpha);
     }
 
     #[test]
@@ -488,13 +653,57 @@ mod tests {
     }
 
     #[test]
+    fn default_style_is_the_glass_look() {
+        let s = Style::default();
+        assert!((s.panel_radius - 20.0).abs() < f32::EPSILON);
+        assert_eq!(s.card, Fill::new(Role::Tint, 0.075));
+        assert_eq!(s.toast, Fill::new(Role::Surface, 0.46));
+        assert_eq!(
+            s.panel_border,
+            Some(Stroke::hairline(Fill::new(Role::Outline, 0.35)))
+        );
+        // A collapsed toast is a full pill; tall cards cap at 28.
+        assert!((s.toast_radius(m::TOAST_HEIGHT, false) - m::TOAST_RADIUS).abs() < f32::EPSILON);
+        assert!((s.toast_radius(200.0, true) - 28.0).abs() < f32::EPSILON);
+        assert!((s.card_radius(40.0) - 20.0).abs() < f32::EPSILON);
+        assert!((s.button_radius(m::PILL_HEIGHT) - m::PILL_HEIGHT / 2.0).abs() < f32::EPSILON);
+        let shadow = s.shadow.unwrap_or_else(|| panic!("glass has a shadow"));
+        assert_eq!(shadow.fill, Fill::new(Role::Fixed(Rgb(0, 0, 0)), 0.28));
+        assert!(s.panel_blur && s.toast_blur);
+        assert!((s.text.line_height(TextStyle::Body) - 17.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn themes_change_shape_borders_and_type() {
+        let terminal = BUILTIN
+            .iter()
+            .find(|(n, _)| *n == "terminal")
+            .and_then(|(_, src)| ThemeFile::from_toml(src).ok())
+            .unwrap_or_else(|| panic!("terminal theme"));
+        let s = Style::new(&terminal.look());
+        assert!(s.card_radius(100.0).abs() < f32::EPSILON);
+        assert!(s.button_radius(m::PILL_HEIGHT).abs() < f32::EPSILON);
+        assert_eq!(s.shadow, None);
+        assert!(!s.panel_blur && !s.toast_blur);
+        assert!((s.toast_border.map_or(0.0, |b| b.width) - 2.0).abs() < f32::EPSILON);
+        assert_eq!(s.family.as_deref(), Some("monospace"));
+        assert!(s.text.size(TextStyle::Body) < TextStyle::Body.base_size());
+        // A zero-width or invisible border is no border.
+        let mut look = Look::default();
+        look.card.border.width = 0.0;
+        look.toast.border.opacity = 0.0;
+        let s = Style::new(&look);
+        assert_eq!((s.card_border, s.toast_border), (None, None));
+    }
+
+    #[test]
     fn summaries_are_bold() {
         assert_eq!(TextStyle::Summary.weight(), Weight::Bold);
         assert_eq!(TextStyle::SummaryLine.weight(), Weight::Bold);
         assert_eq!(TextStyle::IconLetter.weight(), Weight::Bold);
         assert_eq!(TextStyle::Title.weight(), Weight::Semibold);
-        assert!((TextStyle::Summary.size() - 14.0).abs() < f32::EPSILON);
-        assert!((TextStyle::SummaryLine.size() - 14.0).abs() < f32::EPSILON);
+        assert!((TextStyle::Summary.base_size() - 14.0).abs() < f32::EPSILON);
+        assert!((TextStyle::SummaryLine.base_size() - 14.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -511,8 +720,9 @@ mod tests {
 
     #[test]
     fn single_line_styles() {
+        let t = Type::default();
         assert!(TextStyle::Meta.single_line());
         assert!(!TextStyle::Body.single_line());
-        assert!(TextStyle::Body.line_height() > TextStyle::Body.size());
+        assert!(t.line_height(TextStyle::Body) > t.size(TextStyle::Body));
     }
 }

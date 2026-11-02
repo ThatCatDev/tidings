@@ -5,6 +5,7 @@ use std::time::{Duration, SystemTime};
 
 use tidings_core::clock::FakeClock;
 use tidings_core::gesture::GestureKind;
+use tidings_core::look::{ColorOverrides, Look};
 use tidings_core::model::{Action, Urgency};
 use tidings_core::theme::Rgb;
 
@@ -69,6 +70,7 @@ impl Harness {
             ToastPolicy::default(),
             Swipe::default(),
             Theme::default(),
+            Look::default(),
         );
         Self { app, rec, clock }
     }
@@ -607,6 +609,57 @@ fn theme_and_shutdown_reach_the_ui() {
     );
 }
 
+#[test]
+fn theme_colours_override_colors_json() {
+    let rec = Rec::default();
+    let deps = AppDeps {
+        clock: Arc::new(FakeClock::at_unix(0)),
+        ui: Box::new(rec.clone()),
+        signals: Box::new(rec.clone()),
+        panel_state: Box::new(rec.clone()),
+    };
+    let mut look = Look {
+        colors: ColorOverrides {
+            primary: Some(Rgb(9, 9, 9)),
+            ..ColorOverrides::default()
+        },
+        ..Look::default()
+    };
+    look.panel.opacity = Some(1.0);
+    let mut app = App::new(
+        deps,
+        ToastPolicy::default(),
+        Swipe::default(),
+        Theme::default(),
+        look,
+    );
+    // Both the first theme and every reload from colors.json are overlaid.
+    let reload = Theme {
+        primary: Rgb(1, 2, 3),
+        outline: Rgb(4, 5, 6),
+        ..Theme::default()
+    };
+    let _ = app.handle(AppEvent::Theme(Box::new(reload)));
+    let updates = std::mem::take(&mut *rec.ui.lock().unwrap());
+    let themes: Vec<Theme> = updates
+        .into_iter()
+        .filter_map(|u| match u {
+            UiUpdate::Theme(t) => Some(*t),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(themes.len(), 2);
+    for t in &themes {
+        assert_eq!(t.primary, Rgb(9, 9, 9));
+        assert!((t.surface_alpha - 1.0).abs() < f32::EPSILON);
+    }
+    assert_eq!(
+        themes[1].outline,
+        Rgb(4, 5, 6),
+        "unset colours follow the file"
+    );
+}
+
 #[tokio::test]
 async fn run_loop_expires_toasts_on_its_own_timer() {
     let rec = Rec::default();
@@ -622,7 +675,13 @@ async fn run_loop_expires_toasts_on_its_own_timer() {
         normal_timeout: Duration::from_millis(20),
         ..ToastPolicy::default()
     };
-    let app = App::new(deps, policy, Swipe::default(), Theme::default());
+    let app = App::new(
+        deps,
+        policy,
+        Swipe::default(),
+        Theme::default(),
+        Look::default(),
+    );
     let (tx, rx) = mpsc::unbounded_channel();
     let actor = tokio::spawn(app.run(rx));
     let (reply, id) = oneshot::channel();

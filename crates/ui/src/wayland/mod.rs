@@ -56,7 +56,7 @@ use crate::anim::Timing;
 use crate::geom::{Point, f32_to_u32, u32_to_f32};
 use crate::render::Painter;
 use crate::scene::HitTarget;
-use crate::style::{Palette, metrics as m};
+use crate::style::{Palette, Style, metrics as m};
 use canvas::{Canvas, SurfaceSpec};
 use panel::PanelView;
 use toasts::ToastStack;
@@ -72,15 +72,24 @@ pub enum SurfaceId {
     Toasts,
 }
 
-const PANEL_SPEC: SurfaceSpec = SurfaceSpec {
-    id: SurfaceId::Panel,
-    namespace: "tidings-panel",
-    layer: Layer::Top,
-    anchor: Anchor::TOP.union(Anchor::BOTTOM).union(Anchor::RIGHT),
-    size: (f32_to_u32_const(panel::SURFACE_WIDTH), 0),
-    margin: (m::PANEL_MARGIN_TOP, 0, m::PANEL_MARGIN_BOTTOM, 0),
-    keyboard: KeyboardInteractivity::OnDemand,
-};
+/// Layer namespaces. Hyprland layer rules match these to blur behind our
+/// surfaces; a theme that turns blur off uses the `-noblur` names, which
+/// the rules do not match.
+fn namespace(blur: bool, blurred: &'static str, plain: &'static str) -> &'static str {
+    if blur { blurred } else { plain }
+}
+
+fn panel_spec(blur: bool) -> SurfaceSpec {
+    SurfaceSpec {
+        id: SurfaceId::Panel,
+        namespace: namespace(blur, "tidings-panel", "tidings-panel-noblur"),
+        layer: Layer::Top,
+        anchor: Anchor::TOP.union(Anchor::BOTTOM).union(Anchor::RIGHT),
+        size: (f32_to_u32_const(panel::SURFACE_WIDTH), 0),
+        margin: (m::PANEL_MARGIN_TOP, 0, m::PANEL_MARGIN_BOTTOM, 0),
+        keyboard: KeyboardInteractivity::OnDemand,
+    }
+}
 
 const CATCHER_SPEC: SurfaceSpec = SurfaceSpec {
     id: SurfaceId::Catcher,
@@ -92,10 +101,10 @@ const CATCHER_SPEC: SurfaceSpec = SurfaceSpec {
     keyboard: KeyboardInteractivity::None,
 };
 
-fn toast_spec(height: u32) -> SurfaceSpec {
+fn toast_spec(height: u32, blur: bool) -> SurfaceSpec {
     SurfaceSpec {
         id: SurfaceId::Toasts,
-        namespace: "tidings-toast",
+        namespace: namespace(blur, "tidings-toast", "tidings-toast-noblur"),
         layer: Layer::Overlay,
         anchor: Anchor::TOP.union(Anchor::RIGHT),
         size: (f32_to_u32_const(toasts::SURFACE_WIDTH), height.max(1)),
@@ -172,11 +181,12 @@ impl std::fmt::Debug for App {
 pub fn setup(
     events: Sender<UiEvent>,
     timing: Timing,
+    style: Style,
 ) -> Result<(EventLoop<'static, App>, App, channel::Sender<UiUpdate>), UiError> {
     let conn = Connection::connect_to_env()?;
     let (globals, mut queue) = registry_queue_init::<App>(&conn)?;
     let qh = queue.handle();
-    let mut app = App::new(conn.clone(), &globals, &qh, events, timing)?;
+    let mut app = App::new(conn.clone(), &globals, &qh, events, timing, style)?;
     // Second roundtrip: receive the shm format list and seat capabilities.
     queue.roundtrip(&mut app)?;
     if app.shm.formats().contains(&wl_shm::Format::Abgr8888) {
@@ -228,6 +238,7 @@ impl App {
         qh: &QueueHandle<Self>,
         events: Sender<UiEvent>,
         timing: Timing,
+        style: Style,
     ) -> Result<Self, UiError> {
         let compositor = CompositorState::bind(globals, qh)
             .map_err(|_| UiError::MissingGlobal("wl_compositor"))?;
@@ -255,7 +266,7 @@ impl App {
             events,
             palette: Palette::default(),
             view: ViewModel::default(),
-            painter: Painter::new(),
+            painter: Painter::with_style(style),
             panel_view: PanelView::new(timing),
             panel: None,
             catcher: None,
@@ -334,7 +345,7 @@ impl App {
             Ok(c) => self.catcher = Some(c),
             Err(e) => log::warn!("tidings-ui: cannot create catcher: {e}"),
         }
-        match Canvas::create(self, &qh, &PANEL_SPEC) {
+        match Canvas::create(self, &qh, &panel_spec(self.painter.style.panel_blur)) {
             Ok(c) => self.panel = Some(c),
             Err(e) => {
                 log::error!("tidings-ui: cannot create panel: {e}");
@@ -476,7 +487,7 @@ impl App {
         if self.toasts.is_none() {
             let qh = self.queue();
             let h = f32_to_u32(self.toast_stack.needed_height(now));
-            match Canvas::create(self, &qh, &toast_spec(h)) {
+            match Canvas::create(self, &qh, &toast_spec(h, self.painter.style.toast_blur)) {
                 Ok(c) => self.toasts = Some(c),
                 Err(e) => log::error!("tidings-ui: cannot create toast surface: {e}"),
             }

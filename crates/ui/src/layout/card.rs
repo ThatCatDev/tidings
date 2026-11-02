@@ -5,12 +5,14 @@ use tidings_core::view::CardView;
 
 use crate::geom::{Point, Rect, snap};
 use crate::scene::{Align, GlyphKind, HitTarget, Monogram, Node, Scene};
-use crate::style::{Fill, MONOGRAM_TINTS, Role, TextStyle, fills, metrics as m};
+use crate::style::{Fill, MONOGRAM_TINTS, Role, Style, TextStyle, fills, metrics as m};
 use crate::text::{TextFit, TextMeasure};
 
 /// How a card is presented.
 #[derive(Debug, Clone)]
-pub struct CardOpts {
+pub struct CardOpts<'a> {
+    /// The theme's shapes and fills.
+    pub style: &'a Style,
     /// Click target for the card body.
     pub body_target: HitTarget,
     /// Target for the hover "×" button.
@@ -110,7 +112,7 @@ pub fn measure_card_with(
     let text_w = col_right - text_x;
 
     // Row 1: app name (left) and time (right).
-    let meta_h = TextStyle::Meta.line_height();
+    let meta_h = meas.line_height(TextStyle::Meta);
     // Rows starting inside the corner reserve stop short of it.
     let clear_right = width - corner_reserve - CORNER_GAP;
     let row_right = if pad < corner_reserve {
@@ -309,13 +311,6 @@ pub fn fallback_letter(app_name: &str) -> char {
         .unwrap_or('•')
 }
 
-/// Corner radius for a card of `height`: a true pill while the card is short,
-/// capped at [`m::CARD_RADIUS_MAX`] once it grows.
-#[must_use]
-pub fn card_radius(height: f32) -> f32 {
-    (height / 2.0).min(m::CARD_RADIUS_MAX)
-}
-
 /// Emits a measured panel card at `origin` into `scene`: its tinted fill and
 /// outline, the content, and the hover "×". Hits are added only when they
 /// intersect `hit_clip`.
@@ -324,24 +319,25 @@ pub fn emit_card(
     card: &CardView,
     lay: &CardLayout,
     origin: Point,
-    opts: &CardOpts,
+    opts: &CardOpts<'_>,
     hit_clip: Rect,
 ) {
+    let style = opts.style;
     let bounds = Rect::new(origin.x, origin.y, lay.width, lay.height);
     let stroke = if card.urgency == Urgency::Critical {
-        fills::CRITICAL_OUTLINE
+        Some(style.critical)
     } else {
-        fills::CARD_OUTLINE
+        style.card_border
     };
     scene.push(Node::RoundRect {
         rect: bounds,
-        radius: card_radius(lay.height),
+        radius: style.card_radius(lay.height),
         fill: Some(if opts.hovered {
-            fills::CARD_HOVER
+            style.card_hover
         } else {
-            fills::CARD
+            style.card
         }),
-        stroke: Some(stroke),
+        stroke,
     });
     emit_card_content(scene, card, lay, origin, opts, hit_clip);
     if opts.hovered {
@@ -363,7 +359,7 @@ pub fn emit_card_content(
     card: &CardView,
     lay: &CardLayout,
     origin: Point,
-    opts: &CardOpts,
+    opts: &CardOpts<'_>,
     hit_clip: Rect,
 ) {
     let at = |r: Rect| r.translate(origin.x, origin.y);
@@ -392,7 +388,7 @@ pub fn emit_card_content(
         scene.push(text(at(*r), f, TextStyle::Body, muted, Align::Left));
     }
 
-    let radius = card_radius(lay.height);
+    let radius = opts.style.card_radius(lay.height);
     add_hit(scene, bounds, radius, opts.body_target.clone(), hit_clip);
     for (r, f, key) in &lay.actions {
         let target = HitTarget::Action {
@@ -400,7 +396,7 @@ pub fn emit_card_content(
             key: key.clone(),
         };
         let hovered = opts.hovered_target.as_ref() == Some(&target);
-        pill(scene, at(*r), f, hovered, target, hit_clip);
+        pill(scene, opts.style, at(*r), f, hovered, target, hit_clip);
     }
 }
 
@@ -416,24 +412,21 @@ pub fn add_hit(scene: &mut Scene, rect: Rect, radius: f32, target: HitTarget, cl
 /// A text pill button.
 pub fn pill(
     scene: &mut Scene,
+    style: &Style,
     rect: Rect,
     label: &TextFit,
     hovered: bool,
     target: HitTarget,
     clip: Rect,
 ) {
-    let radius = rect.h / 2.0;
+    let radius = style.button_radius(rect.h);
     scene.push(Node::RoundRect {
         rect,
         radius,
-        fill: Some(if hovered {
-            fills::PILL_HOVER
-        } else {
-            fills::PILL
-        }),
+        fill: Some(style.button_fill(hovered)),
         stroke: None,
     });
-    let lh = TextStyle::Button.line_height();
+    let lh = style.text.line_height(TextStyle::Button);
     let tr = Rect::new(rect.x, rect.y + (rect.h - lh) / 2.0, rect.w, lh);
     scene.push(Node::Text {
         rect: tr,

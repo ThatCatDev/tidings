@@ -1,0 +1,45 @@
+# tidings theme: Mocha
+name = "Mocha"
+description = "Catppuccin Mocha: deep base, mauve accents, soft lavender rims."
+
+[palette]
+mode = "dark"
+surface = "#1e1e2e"
+surface_variant = "#313244"
+on_surface = "#cdd6f4"
+on_surface_variant = "#a6adc8"
+primary = "#cba6f7"
+on_primary = "#11111b"
+error = "#f38ba8"
+on_error = "#11111b"
+outline = "#b4befe"
+
+[panel]
+opacity = 0.8
+radius = 22
+border_opacity = 0.22
+
+[card]
+radius = 22
+color = "surface_variant"
+opacity = 0.55
+hover_opacity = 0.75
+border_color = "outline"
+border_opacity = 0.08
+
+[toast]
+radius = 29
+opacity = 0.72
+hover_opacity = 0.8
+expanded_opacity = 0.76
+border_color = "primary"
+border_opacity = 0.3
+
+[shadow]
+color = "#11111b"
+opacity = 0.35
+
+[button]
+color = "primary"
+opacity = 0.16
+hover_opacity = 0.28

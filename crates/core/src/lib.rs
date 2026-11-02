@@ -15,6 +15,7 @@ pub mod view; // CONTRACT
 
 pub mod clock;
 pub mod config;
+pub mod look;
 pub mod panel;
 pub mod policy;
 pub mod store;

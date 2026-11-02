@@ -9,6 +9,9 @@
 //!
 //! `-- states <dir>` renders one toast collapsed, hovered and expanded to
 //! `<dir>/toast-*.png` offscreen (hover cannot be forced on a live surface).
+//!
+//! `-- themes <dir>` renders the panel and a toast in each state for every
+//! built-in theme to `<dir>/theme-<name>.png`, over a colourful backdrop.
 
 use std::sync::mpsc;
 use std::thread::sleep;
@@ -173,11 +176,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let dir = args.next().unwrap_or_else(|| ".".into());
         return render_states(std::path::Path::new(&dir));
     }
+    if mode == "themes" {
+        let dir = args.next().unwrap_or_else(|| ".".into());
+        return render_themes(std::path::Path::new(&dir));
+    }
 
     let hold = Duration::from_secs_f32(args.next().and_then(|s| s.parse().ok()).unwrap_or(3.0));
 
     let (tx, rx) = mpsc::channel();
-    let ui = tidings_ui::spawn(tx, tidings_core::config::AnimationConfig::default())?;
+    let ui = tidings_ui::spawn(
+        tx,
+        tidings_core::config::AnimationConfig::default(),
+        &tidings_core::look::Look::default(),
+    )?;
     std::thread::spawn(move || {
         for ev in rx {
             println!("ui event: {ev:?}");
@@ -252,12 +263,115 @@ fn render_states(dir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>
         ("expanded", toast(mail.card.clone(), true), None),
     ];
     for (name, t, hovered) in states {
-        let lay = layout_toast(&t, scale, hovered, &mut painter.text);
+        let lay = layout_toast(&t, scale, hovered, &painter.style, &mut painter.text);
         let (w, h) = tidings_ui::render::physical_size(&lay.scene, scale);
         let mut pm = tiny_skia::Pixmap::new(w, h).ok_or("empty toast")?;
         pm.fill(tiny_skia::Color::from_rgba8(0x1b, 0x12, 0x14, 0xff));
         painter.paint_into(&mut pm, &lay.scene, &palette, scale);
         let path = dir.join(format!("toast-{name}.png"));
+        pm.save_png(&path)?;
+        println!("wrote {}", path.display());
+    }
+    Ok(())
+}
+
+/// Renders every built-in theme: the panel beside a toast collapsed, hovered
+/// and expanded, over a colourful backdrop standing in for blurred windows.
+fn render_themes(dir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    use tidings_core::config::theme::{BUILTIN, ThemeFile};
+    use tidings_ui::geom::Size;
+    use tidings_ui::layout::{Interaction, layout_panel, layout_toast};
+    use tidings_ui::render::Painter;
+    use tidings_ui::scene::HitTarget;
+    use tidings_ui::style::{Palette, Style};
+    use tiny_skia::{
+        Color, GradientStop, LinearGradient, Paint, PixmapPaint, Point, Rect, SpreadMode, Transform,
+    };
+
+    let scale = 1.5;
+    let (panel_w, panel_h) = (380.0, 620.0);
+    let gap = 24.0;
+    let toast_w = 384.0;
+    let (w, h) = (gap + panel_w + gap + toast_w + gap, panel_h + 2.0 * gap);
+    // The Noctalia hook's dark colours.
+    let colors = Theme {
+        primary: Rgb(0xa8, 0xc7, 0xfa),
+        ..Theme::dark()
+    };
+    let view = sample(true);
+    let mail = view
+        .toasts
+        .iter()
+        .find(|t| t.card.id == NotificationId(12))
+        .ok_or("no mail toast")?
+        .card
+        .clone();
+    let hover = HitTarget::Activate(mail.id);
+
+    for (name, src) in BUILTIN {
+        let look = ThemeFile::from_toml(src)?.look();
+        let mut painter = Painter::with_style(Style::new(&look));
+        let palette = Palette::new(look.apply_to(colors.clone()));
+        let px = |v: f32| tidings_ui::geom::f32_to_u32((v * scale).round());
+        let mut pm = tiny_skia::Pixmap::new(px(w), px(h)).ok_or("canvas")?;
+        let backdrop = LinearGradient::new(
+            Point::from_xy(0.0, 0.0),
+            Point::from_xy(w * scale, h * scale),
+            vec![
+                GradientStop::new(0.0, Color::from_rgba8(0x3a, 0x2f, 0x6b, 0xff)),
+                GradientStop::new(0.45, Color::from_rgba8(0x1f, 0x6f, 0x78, 0xff)),
+                GradientStop::new(1.0, Color::from_rgba8(0xc4, 0x6a, 0x3c, 0xff)),
+            ],
+            SpreadMode::Pad,
+            Transform::identity(),
+        )
+        .ok_or("gradient")?;
+        let paint = Paint {
+            shader: backdrop,
+            ..Paint::default()
+        };
+        let full = Rect::from_xywh(0.0, 0.0, w * scale, h * scale).ok_or("rect")?;
+        pm.fill_rect(full, &paint, Transform::identity(), None);
+
+        let mut place = |scene: &tidings_ui::scene::Scene,
+                         painter: &mut Painter,
+                         x: f32,
+                         y: f32|
+         -> Result<f32, Box<dyn std::error::Error>> {
+            let sprite = painter.paint(scene, &palette, scale).ok_or("sprite")?;
+            pm.draw_pixmap(
+                tidings_ui::geom::f32_to_i32((x * scale).round()),
+                tidings_ui::geom::f32_to_i32((y * scale).round()),
+                sprite.as_ref(),
+                &PixmapPaint::default(),
+                Transform::identity(),
+                None,
+            );
+            Ok(scene.size.h)
+        };
+
+        let panel = layout_panel(
+            &view,
+            Size::new(panel_w, panel_h),
+            scale,
+            &Interaction::default(),
+            &painter.style,
+            &mut painter.text,
+        );
+        place(&panel.scene, &mut painter, gap, gap)?;
+
+        // Toast scenes carry their own transparent inset for the shadow.
+        let mut y = gap - 12.0;
+        let states = [
+            (toast(mail.clone(), false), None),
+            (toast(mail.clone(), false), Some(&hover)),
+            (toast(mail.clone(), true), None),
+        ];
+        for (t, hovered) in states {
+            let lay = layout_toast(&t, scale, hovered, &painter.style, &mut painter.text);
+            y += place(&lay.scene, &mut painter, 2.0 * gap + panel_w - 12.0, y)? - 12.0;
+        }
+        let path = dir.join(format!("theme-{name}.png"));
         pm.save_png(&path)?;
         println!("wrote {}", path.display());
     }

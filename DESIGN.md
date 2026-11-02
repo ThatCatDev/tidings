@@ -103,6 +103,14 @@ Dependency direction: `tidings -> {core, gesture, ui}`, `gesture -> core`, `ui -
   - gestures → `RecognizerConfig.edge` and `panel::Swipe`
   - animation → `tidings_ui::anim::Timing`, which scales every duration and the spring by `speed`, or makes everything instant
   - theme.colors → the colours watcher (`TIDINGS_COLORS` still wins)
+  - theme.name and `[theme.*]` → a `Look` (see Themes below)
+
+### Themes
+- A theme file (`themes/*.toml` built in; `~/.config/tidings/themes/<name>.toml` overrides) is parsed by `tidings_core::config::theme` into a `LookPatch`: only the keys written, already validated, with positions in errors like the config. `config.toml` accepts the same sections under `[theme]`. The sections are declared once with the `section!` macro, which generates the raw serde struct, the checked patch struct and the check between them.
+- Layering: `Look::default()` (the glass theme; a test pins `themes/glass.toml` to it) ← the chosen theme's patch ← the config's patch. A missing or invalid theme is logged and glass used, keeping the config's overrides.
+- `tidings_core::look::Look` is pure data. The UI turns it into a `tidings_ui::style::Style` once at startup: radii, `Fill`s (still colour `Role`s, so a colours change is only a repaint), `Stroke`s with widths, the shadow and the type scale. Layout takes `&Style`; text measuring goes through `TextMeasure::line_height`, so the engine and layout agree on spacing.
+- The look's `[palette]` and panel opacity are applied to every `colors.json` theme by the App actor (`Look::apply_to`) before it reaches the UI.
+- Blur is the compositor's: `blur = false` gives the surfaces `-noblur` layer namespaces, which the Hyprland rules don't match.
 
 ### Theme
 - `~/.config/tidings/colors.json` (override: `TIDINGS_COLORS`), watched for changes (inotify via `notify` crate or polling mtime ~1 s). Invalid or missing file → built-in dark defaults.

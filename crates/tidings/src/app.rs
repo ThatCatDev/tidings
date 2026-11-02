@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use tidings_core::clock::Clock;
 use tidings_core::gesture::GestureEvent;
+use tidings_core::look::Look;
 use tidings_core::model::{CloseReason, Notification, NotificationId};
 use tidings_core::panel::{Panel, Swipe};
 use tidings_core::policy::ToastPolicy;
@@ -112,6 +113,8 @@ pub struct App {
     dirty: bool,
     refresh_at: Option<Duration>,
     reported_open: bool,
+    /// The theme's colour overrides, applied to every `colors.json` theme.
+    look: Look,
 }
 
 impl fmt::Debug for App {
@@ -126,9 +129,10 @@ impl fmt::Debug for App {
 }
 
 impl App {
-    /// Creates the actor and pushes the initial theme and (empty) view to the UI.
+    /// Creates the actor and pushes the initial theme (with `look`'s colour
+    /// overrides) and (empty) view to the UI.
     #[must_use]
-    pub fn new(deps: AppDeps, policy: ToastPolicy, swipe: Swipe, theme: Theme) -> Self {
+    pub fn new(deps: AppDeps, policy: ToastPolicy, swipe: Swipe, theme: Theme, look: Look) -> Self {
         let mut app = Self {
             store: Store::default(),
             toasts: Toasts::new(policy.max_visible),
@@ -140,11 +144,18 @@ impl App {
             dirty: true,
             refresh_at: None,
             reported_open: false,
+            look,
         };
-        app.deps.ui.send(UiUpdate::Theme(Box::new(theme)));
+        app.set_theme(theme);
         app.deps.panel_state.set_panel_open(false);
         app.flush();
         app
+    }
+
+    /// Sends `theme` (from `colors.json`) to the UI with the look applied.
+    fn set_theme(&mut self, theme: Theme) {
+        let theme = self.look.apply_to(theme);
+        self.deps.ui.send(UiUpdate::Theme(Box::new(theme)));
     }
 
     /// Runs the actor until `Shutdown` or until every sender is gone.
@@ -193,7 +204,7 @@ impl App {
                 let response = self.ipc(req);
                 let _ = reply.send(response);
             }
-            AppEvent::Theme(theme) => self.deps.ui.send(UiUpdate::Theme(theme)),
+            AppEvent::Theme(theme) => self.set_theme(*theme),
             AppEvent::Tick => self.tick(),
             AppEvent::Shutdown => {
                 self.deps.ui.send(UiUpdate::Shutdown);

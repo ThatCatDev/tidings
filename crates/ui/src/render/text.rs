@@ -14,7 +14,7 @@ use tiny_skia::PixmapMut;
 
 use crate::geom::{PxRect, Rect, f32_to_u32};
 use crate::scene::Align;
-use crate::style::{Rgba, TextStyle, Weight};
+use crate::style::{Rgba, TextStyle, Type, Weight};
 use crate::text::{TextFit, TextMeasure, ellipsize, normalise};
 
 /// Upper bound on cached shaped buffers before the cache is flushed.
@@ -40,6 +40,7 @@ pub struct TextEngine {
     fonts: FontSystem,
     swash: SwashCache,
     family: String,
+    typ: Type,
     fits: HashMap<FitKey, TextFit>,
     shaped: HashMap<ShapeKey, Buffer>,
 }
@@ -48,6 +49,7 @@ impl std::fmt::Debug for TextEngine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TextEngine")
             .field("family", &self.family)
+            .field("type", &self.typ)
             .field("cached_fits", &self.fits.len())
             .field("cached_buffers", &self.shaped.len())
             .finish_non_exhaustive()
@@ -58,16 +60,28 @@ impl std::fmt::Debug for TextEngine {
 const PREFERRED: &[&str] = &["Inter", "Inter Variable", "Inter Display"];
 
 impl TextEngine {
-    /// Loads system fonts and picks the UI family. Slow (font scan); call once.
+    /// Loads system fonts and picks the UI family at the default sizes.
+    /// Slow (font scan); call once.
     #[must_use]
     pub fn new() -> Self {
+        Self::with_type(Type::default(), None)
+    }
+
+    /// Like [`TextEngine::new`], with the theme's sizes and spacing and,
+    /// if given and installed, its font `family` (a name or a fontconfig
+    /// alias such as `monospace`).
+    #[must_use]
+    pub fn with_type(typ: Type, family: Option<&str>) -> Self {
         let fonts = FontSystem::new();
-        let family = pick_family(&fonts);
+        let family = family
+            .and_then(|f| resolve_family(&fonts, f))
+            .unwrap_or_else(|| pick_family(&fonts));
         log::debug!("tidings-ui: using font family {family:?}");
         Self {
             fonts,
             swash: SwashCache::new(),
             family,
+            typ,
             fits: HashMap::new(),
             shaped: HashMap::new(),
         }
@@ -90,8 +104,9 @@ impl TextEngine {
         }
         let fonts = &mut self.fonts;
         let family = &self.family;
+        let typ = self.typ;
         self.shaped.entry(key).or_insert_with(|| {
-            let metrics = Metrics::new(style.size(), style.line_height());
+            let metrics = Metrics::new(typ.size(style), typ.line_height(style));
             let mut buf = Buffer::new(fonts, metrics);
             buf.set_wrap(fonts, Wrap::WordOrGlyph);
             buf.set_size(fonts, Some(width.max(1.0)), None);
@@ -174,6 +189,10 @@ impl Default for TextEngine {
 }
 
 impl TextMeasure for TextEngine {
+    fn line_height(&self, style: TextStyle) -> f32 {
+        self.typ.line_height(style)
+    }
+
     fn fit(&mut self, text: &str, style: TextStyle, max_width: f32, max_lines: u32) -> TextFit {
         let key = FitKey {
             text: text.to_owned(),
@@ -200,7 +219,7 @@ impl TextMeasure for TextEngine {
         }
         let fit = TextFit {
             width: w.ceil().min(width),
-            height: crate::geom::u32_to_f32(lines) * style.line_height(),
+            height: crate::geom::u32_to_f32(lines) * self.typ.line_height(style),
             lines,
             text: shown,
         };
@@ -228,19 +247,38 @@ fn has_family(fonts: &FontSystem, name: &str) -> bool {
         .any(|f| f.families.iter().any(|(n, _)| n.eq_ignore_ascii_case(name)))
 }
 
-/// Inter if installed, else fontconfig's `sans-serif`, else any face.
-fn pick_family(fonts: &FontSystem) -> String {
-    if let Some(name) = PREFERRED.iter().find(|n| has_family(fonts, n)) {
-        return (*name).to_owned();
+/// `name` if installed, else what fontconfig substitutes for it (which
+/// resolves aliases like `monospace`); `None` (with a warning) if neither.
+fn resolve_family(fonts: &FontSystem, name: &str) -> Option<String> {
+    if has_family(fonts, name) {
+        return Some(name.to_owned());
     }
-    let fc = Command::new("fc-match")
-        .args(["-f", "%{family[0]}", "sans-serif"])
+    let found = fc_match(name).filter(|f| has_family(fonts, f));
+    match &found {
+        Some(f) => log::info!("tidings-ui: font {name:?} resolves to {f:?}"),
+        None => log::warn!("tidings-ui: font {name:?} is not installed; using the UI font"),
+    }
+    found
+}
+
+/// fontconfig's first family for `pattern`.
+fn fc_match(pattern: &str) -> Option<String> {
+    Command::new("fc-match")
+        .args(["-f", "%{family[0]}", pattern])
         .output()
         .ok()
         .filter(|o| o.status.success())
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty() && has_family(fonts, s));
+        .filter(|s| !s.is_empty())
+}
+
+/// Inter if installed, else fontconfig's `sans-serif`, else any face.
+fn pick_family(fonts: &FontSystem) -> String {
+    if let Some(name) = PREFERRED.iter().find(|n| has_family(fonts, n)) {
+        return (*name).to_owned();
+    }
+    let fc = fc_match("sans-serif").filter(|s| has_family(fonts, s));
     if let Some(name) = fc {
         return name;
     }

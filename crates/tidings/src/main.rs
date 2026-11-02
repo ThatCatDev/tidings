@@ -14,13 +14,16 @@ use tidings::daemon::{Daemon, DaemonConfig};
 use tidings::ipc;
 use tidings::ipc::client::{self, ClientError};
 use tidings::ipc::proto::{Request, Response};
+use tidings::themes::{self, Origin};
+use tidings_core::config::theme::DEFAULT_THEME;
 use tidings_core::config::{AnimationConfig, TEMPLATE};
+use tidings_core::look::Look;
 use tidings_core::ui::{UiEvent, UiHandle};
 use tracing_subscriber::EnvFilter;
 
 use clap::Parser as _;
 
-use crate::cli::{Cli, Command, ConfigCommand, DaemonArgs};
+use crate::cli::{Cli, Command, ConfigCommand, DaemonArgs, ThemeCommand};
 
 /// The only place the UI is created: starts the Wayland UI thread.
 ///
@@ -29,8 +32,9 @@ use crate::cli::{Cli, Command, ConfigCommand, DaemonArgs};
 fn spawn_ui(
     events: Sender<UiEvent>,
     animation: AnimationConfig,
+    look: &Look,
 ) -> Result<Box<dyn UiHandle>, Box<dyn std::error::Error + Send + Sync>> {
-    Ok(tidings_ui::spawn(events, animation)?)
+    Ok(tidings_ui::spawn(events, animation, look)?)
 }
 
 fn main() -> ExitCode {
@@ -49,6 +53,7 @@ fn main() -> ExitCode {
     {
         Command::Ctl { command } => ctl(command.into()),
         Command::Config { command } => config(command),
+        Command::Theme { command } => theme(command),
         Command::Daemon(args) => {
             init_logging();
             match run_daemon(&args) {
@@ -156,6 +161,8 @@ fn run_daemon(args: &DaemonArgs) -> anyhow::Result<()> {
         config.settings.gestures.enabled = false;
     }
     let animation = config.settings.animation;
+    config.look = themes::resolve(&config.settings, themes::themes_dir().as_deref());
+    let look = config.look.clone();
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -165,7 +172,7 @@ fn run_daemon(args: &DaemonArgs) -> anyhow::Result<()> {
         let daemon = Daemon::start(
             config,
             Arc::new(SystemClock::default()),
-            Box::new(move |events| spawn_ui(events, animation)),
+            Box::new(move |events| spawn_ui(events, animation, &look)),
         )
         .await?;
         let mut sigterm =
@@ -178,4 +185,105 @@ fn run_daemon(args: &DaemonArgs) -> anyhow::Result<()> {
         daemon.shutdown().await;
         Ok(())
     })
+}
+
+/// `tidings theme ...`: list, show, check, or print the themes folder.
+fn theme(command: ThemeCommand) -> ExitCode {
+    let dir = themes::themes_dir();
+    match command {
+        ThemeCommand::List => {
+            let chosen = config_file::load_or_default(config_file::config_path().as_deref())
+                .theme
+                .name
+                .unwrap_or_else(|| DEFAULT_THEME.to_owned());
+            for e in themes::list(dir.as_deref()) {
+                let mark = if e.name == chosen { '*' } else { ' ' };
+                let origin = match &e.origin {
+                    Origin::Builtin => "built-in".to_owned(),
+                    Origin::File(p) => p.display().to_string(),
+                };
+                let about = e.description.unwrap_or_default();
+                println!("{mark} {:<10} {about}  ({origin})", e.name);
+            }
+            ExitCode::SUCCESS
+        }
+        ThemeCommand::Show { name } => match themes::find(&name, dir.as_deref()) {
+            Ok(Some(source)) => {
+                print!("{}", source.text);
+                ExitCode::SUCCESS
+            }
+            Ok(None) => {
+                eprintln!("tidings: no theme called {name:?} (see `tidings theme list`)");
+                ExitCode::FAILURE
+            }
+            Err(e) => {
+                eprintln!("tidings: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        ThemeCommand::Check { theme } => check_theme(theme, dir.as_deref()),
+        ThemeCommand::Path => {
+            if let Some(dir) = dir {
+                println!("{}", dir.display());
+                ExitCode::SUCCESS
+            } else {
+                eprintln!("tidings: neither XDG_CONFIG_HOME nor HOME is set");
+                ExitCode::FAILURE
+            }
+        }
+    }
+}
+
+/// Checks a theme given by name or path (default: the configured one).
+fn check_theme(theme: Option<String>, dir: Option<&std::path::Path>) -> ExitCode {
+    let theme = theme.unwrap_or_else(|| {
+        config_file::load_or_default(config_file::config_path().as_deref())
+            .theme
+            .name
+            .unwrap_or_else(|| DEFAULT_THEME.to_owned())
+    });
+    // Anything that cannot be a theme name is a path.
+    let source = if tidings_core::config::theme::is_valid_name(&theme) {
+        themes::find(&theme, dir)
+    } else {
+        let path = std::path::PathBuf::from(&theme);
+        std::fs::read_to_string(&path)
+            .map(|text| {
+                Some(themes::Source {
+                    name: theme.clone(),
+                    origin: Origin::File(path.clone()),
+                    text,
+                })
+            })
+            .map_err(|source| LoadError::Io { path, source })
+    };
+    let source = match source {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            eprintln!("tidings: no theme called {theme:?} (see `tidings theme list`)");
+            return ExitCode::FAILURE;
+        }
+        Err(e) => {
+            eprintln!("tidings: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match themes::parse(&source) {
+        Ok(_) => {
+            println!("{}: ok", source.display_path().display());
+            ExitCode::SUCCESS
+        }
+        Err(LoadError::Invalid { path, errors }) => {
+            for line in config_file::describe(&path, &errors) {
+                eprintln!("{line}");
+            }
+            let n = errors.0.len();
+            eprintln!("{n} error{}", if n == 1 { "" } else { "s" });
+            ExitCode::FAILURE
+        }
+        Err(e) => {
+            eprintln!("tidings: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }

@@ -99,7 +99,14 @@ impl PanelView {
         if !self.needs_layout && self.content_key == Some(key) && self.content.is_some() {
             return;
         }
-        let lay = layout_panel(view, size, scale, &self.ui, &mut painter.text);
+        let lay = layout_panel(
+            view,
+            size,
+            scale,
+            &self.ui,
+            &painter.style,
+            &mut painter.text,
+        );
         self.ui.scroll = lay.scroll;
         let damage = match (&self.layout, self.content_key == Some(key)) {
             (Some(old), true) => old.scene.damage_to(&lay.scene),

@@ -10,7 +10,7 @@ use tidings_core::view::{CardView, GroupView, ViewModel};
 
 use crate::geom::{Point, Rect, Size, snap};
 use crate::scene::{Align, GlyphKind, HitTarget, Node, Scene};
-use crate::style::{Fill, Role, TextStyle, fills, metrics as m};
+use crate::style::{Fill, Role, Style, TextStyle, fills, metrics as m};
 use crate::text::TextMeasure;
 use card::{CardOpts, add_hit, close_button, emit_card, measure_card, pill};
 pub use toast::{ToastLayout, layout_toast, stack_offsets};
@@ -52,6 +52,7 @@ pub fn layout_panel(
     size: Size,
     scale: f32,
     ui: &Interaction,
+    style: &Style,
     meas: &mut dyn TextMeasure,
 ) -> PanelLayout {
     let mut scene = Scene::new(size);
@@ -60,15 +61,15 @@ pub fn layout_panel(
     scene.layer(Point::new(0.0, 0.0), 1.0, scale, sheet, |s, _| {
         s.push(Node::RoundRect {
             rect: sheet,
-            radius: m::PANEL_RADIUS,
-            fill: Some(fills::GLASS),
-            stroke: Some(fills::OUTLINE),
+            radius: style.panel_radius,
+            fill: Some(style.glass),
+            stroke: style.panel_border,
         });
     });
-    scene.hit(sheet, m::PANEL_RADIUS, HitTarget::Background);
+    scene.hit(sheet, style.panel_radius, HitTarget::Background);
     let full = Rect::new(0.0, 0.0, size.w, size.h);
     scene.layer(Point::new(0.0, 0.0), 1.0, scale, full, |s, _| {
-        header(s, view, size, ui, meas);
+        header(s, view, size, ui, style, meas);
     });
 
     // The list viewport starts a little above the first card so a hovered
@@ -84,7 +85,7 @@ pub fn layout_panel(
 
     if view.groups.is_empty() {
         let fit = meas.fit("No Notifications", TextStyle::Empty, col_w, 1);
-        let h = TextStyle::Empty.line_height();
+        let h = meas.line_height(TextStyle::Empty);
         scene.push(Node::Text {
             rect: Rect::new(
                 m::PANEL_PADDING,
@@ -138,6 +139,7 @@ pub fn layout_panel(
                 Viewport {
                     clip: viewport,
                     scale,
+                    style,
                 },
             );
         }
@@ -156,6 +158,7 @@ fn header(
     view: &ViewModel,
     size: Size,
     ui: &Interaction,
+    style: &Style,
     meas: &mut dyn TextMeasure,
 ) {
     let row_cy = m::HEADER_HEIGHT / 2.0 + 2.0;
@@ -171,6 +174,7 @@ fn header(
         let hovered = ui.hovered == Some(HitTarget::ClearAll);
         pill(
             scene,
+            style,
             Rect::new(x, pill_y, w, m::PILL_HEIGHT),
             &fit,
             hovered,
@@ -187,12 +191,12 @@ fn header(
     let hovered = ui.hovered == Some(HitTarget::ToggleDnd);
     let dnd_fill = match (view.dnd, hovered) {
         (true, _) => fills::PILL_ON,
-        (false, true) => fills::PILL_HOVER,
-        (false, false) => fills::PILL,
+        (false, hovered) => style.button_fill(hovered),
     };
+    let dnd_radius = style.button_radius(m::PILL_HEIGHT);
     scene.push(Node::RoundRect {
         rect: dnd,
-        radius: m::PILL_HEIGHT / 2.0,
+        radius: dnd_radius,
         fill: Some(dnd_fill),
         stroke: None,
     });
@@ -206,12 +210,12 @@ fn header(
             Role::OnSurfaceVariant
         }),
     });
-    add_hit(scene, dnd, m::PILL_HEIGHT / 2.0, HitTarget::ToggleDnd, full);
+    add_hit(scene, dnd, dnd_radius, HitTarget::ToggleDnd, full);
 
     let title_x = m::PANEL_PADDING + 8.0;
     let title_w = (x - 8.0 - title_x).max(1.0);
     let fit = meas.fit("Notifications", TextStyle::Title, title_w, 1);
-    let lh = TextStyle::Title.line_height();
+    let lh = meas.line_height(TextStyle::Title);
     scene.push(Node::Text {
         rect: Rect::new(title_x, row_cy - lh / 2.0, title_w, lh),
         text: fit.text,
@@ -277,22 +281,30 @@ impl GroupHeader {
     fn sprite(
         &self,
         scene: &mut Scene,
-        view: Viewport,
+        view: Viewport<'_>,
         key: &str,
         origin: Point,
         ui: &Interaction,
         opacity: f32,
     ) {
         scene.layer(origin, opacity, view.scale, view.clip, |s, clip| {
-            self.emit(s, key, Point::new(0.0, 0.0), ui, clip);
+            self.emit(s, view.style, key, Point::new(0.0, 0.0), ui, clip);
         });
     }
 
-    fn emit(&self, scene: &mut Scene, key: &str, origin: Point, ui: &Interaction, clip: Rect) {
+    fn emit(
+        &self,
+        scene: &mut Scene,
+        style: &Style,
+        key: &str,
+        origin: Point,
+        ui: &Interaction,
+        clip: Rect,
+    ) {
         let w = self.width;
         let title_w = w - Self::CONTROLS_W;
         let row_cy = origin.y + m::GROUP_HEADER_HEIGHT / 2.0 - 3.0;
-        let lh = TextStyle::GroupTitle.line_height();
+        let lh = style.text.line_height(TextStyle::GroupTitle);
         scene.push(Node::Text {
             rect: Rect::new(origin.x + 6.0, row_cy - lh / 2.0, title_w, lh),
             text: self.title.text.clone(),
@@ -317,6 +329,7 @@ impl GroupHeader {
         let collapse = HitTarget::CollapseGroup(key.to_owned());
         pill(
             scene,
+            style,
             Rect::new(
                 close_c.x - close_r - 8.0 - pw,
                 row_cy - pill_h / 2.0,
@@ -453,11 +466,12 @@ impl GroupLayout {
         g: &GroupView,
         origin: Point,
         ui: &Interaction,
-        view: Viewport,
+        view: Viewport<'_>,
     ) {
         let card_hovered =
             |c: &CardView| ui.hovered.as_ref().and_then(HitTarget::card) == Some(c.id);
         let list_opts = |c: &CardView| CardOpts {
+            style: view.style,
             body_target: HitTarget::Activate(c.id),
             close_target: HitTarget::Dismiss(c.id),
             hovered: card_hovered(c),
@@ -466,6 +480,7 @@ impl GroupLayout {
         let expand = HitTarget::ExpandGroup(g.key.clone());
         let clear = HitTarget::ClearGroup(g.key.clone());
         let stack_opts = CardOpts {
+            style: view.style,
             body_target: expand.clone(),
             close_target: clear.clone(),
             hovered: ui
@@ -558,17 +573,18 @@ impl GroupLayout {
 }
 
 /// Where groups are drawn: the list viewport (hit regions are clipped to
-/// it) and the output scale (sprites align to its pixel grid).
+/// it), the output scale (sprites align to its pixel grid) and the theme.
 #[derive(Debug, Clone, Copy)]
-struct Viewport {
+struct Viewport<'a> {
     clip: Rect,
     scale: f32,
+    style: &'a Style,
 }
 
 /// Emits a stack's peeking sheets as a sprite behind a top card at `at`.
 fn sheets_sprite(
     scene: &mut Scene,
-    view: Viewport,
+    view: Viewport<'_>,
     at: Point,
     top: &card::CardLayout,
     sheets: usize,
@@ -576,7 +592,15 @@ fn sheets_sprite(
     opacity: f32,
 ) {
     scene.layer(at, opacity, view.scale, view.clip, |s, clip| {
-        emit_sheets(s, Point::new(0.0, 0.0), top, sheets, expand, clip);
+        emit_sheets(
+            s,
+            view.style,
+            Point::new(0.0, 0.0),
+            top,
+            sheets,
+            expand,
+            clip,
+        );
     });
 }
 
@@ -584,11 +608,11 @@ fn sheets_sprite(
 /// moving or fading it during a group morph reuses its pixels.
 fn card_sprite(
     scene: &mut Scene,
-    view: Viewport,
+    view: Viewport<'_>,
     card: &CardView,
     lay: &card::CardLayout,
     at: Point,
-    opts: &CardOpts,
+    opts: &CardOpts<'_>,
     opacity: f32,
 ) {
     scene.layer(at, opacity, view.scale, view.clip, |s, clip| {
@@ -599,6 +623,7 @@ fn card_sprite(
 /// Paints the "sheets" peeking below a collapsed stack, deepest first.
 fn emit_sheets(
     scene: &mut Scene,
+    style: &Style,
     origin: Point,
     top: &card::CardLayout,
     sheets: usize,
@@ -606,7 +631,7 @@ fn emit_sheets(
     clip: Rect,
 ) {
     let card_rect = Rect::new(origin.x, origin.y, top.width, top.height);
-    let radius = card::card_radius(top.height);
+    let radius = style.card_radius(top.height);
     for i in (1..=sheets).rev() {
         let level = crate::geom::u32_to_f32(u32::try_from(i).unwrap_or(1));
         let inset = m::SHEET_INSET * level;
@@ -618,13 +643,9 @@ fn emit_sheets(
         );
         scene.push(Node::Sheet {
             rect,
-            radius: radius - 2.0 * level,
-            fill: if i == 1 {
-                fills::SHEET_1
-            } else {
-                fills::SHEET_2
-            },
-            stroke: Some(fills::CARD_OUTLINE),
+            radius: (radius - 2.0 * level).max(0.0),
+            fill: style.sheets[usize::from(i != 1)],
+            stroke: style.card_border,
             cutout: card_rect,
             cutout_radius: radius,
         });
@@ -705,6 +726,7 @@ pub(crate) mod tests {
             SIZE,
             1.0,
             &Interaction::default(),
+            &Style::default(),
             &mut MonoMeasure,
         );
         assert!(
@@ -724,6 +746,7 @@ pub(crate) mod tests {
             SIZE,
             1.0,
             &Interaction::default(),
+            &Style::default(),
             &mut MonoMeasure,
         );
         let s = &lay.scene;
@@ -744,6 +767,7 @@ pub(crate) mod tests {
             SIZE,
             1.0,
             &Interaction::default(),
+            &Style::default(),
             &mut MonoMeasure,
         );
         let s = &lay.scene;
@@ -773,6 +797,7 @@ pub(crate) mod tests {
             SIZE,
             1.0,
             &ui,
+            &Style::default(),
             &mut MonoMeasure,
         );
         let s = &lay.scene;
@@ -781,7 +806,7 @@ pub(crate) mod tests {
         // The "×" sits in the card's top-left corner, its centre inside the
         // pill's rounded corner, and wins the hit test over the card body.
         let c = close.center();
-        let r = card::card_radius(card.h);
+        let r = Style::default().card_radius(card.h);
         let corner = Point::new(card.x + r, card.y + r);
         assert!((c.x - corner.x).hypot(c.y - corner.y) < r);
         assert_eq!(
@@ -797,6 +822,7 @@ pub(crate) mod tests {
             SIZE,
             1.0,
             &Interaction::default(),
+            &Style::default(),
             &mut MonoMeasure,
         );
         let s = &lay.scene;
@@ -848,6 +874,7 @@ pub(crate) mod tests {
             Size::new(380.0, 2000.0),
             1.0,
             &ui,
+            &Style::default(),
             &mut MonoMeasure,
         );
         let y = lay
@@ -931,6 +958,7 @@ pub(crate) mod tests {
             SIZE,
             1.0,
             &Interaction::default(),
+            &Style::default(),
             &mut MonoMeasure,
         );
         assert_eq!(
@@ -950,6 +978,7 @@ pub(crate) mod tests {
             SIZE,
             1.0,
             &Interaction::default(),
+            &Style::default(),
             &mut MonoMeasure,
         );
         let t = targets(&lay.scene);
@@ -970,6 +999,7 @@ pub(crate) mod tests {
             SIZE,
             1.0,
             &Interaction::default(),
+            &Style::default(),
             &mut MonoMeasure,
         );
         let a = rect_of(&lay.scene, &HitTarget::Activate(NotificationId(2)));
@@ -990,6 +1020,7 @@ pub(crate) mod tests {
             Size::new(380.0, 600.0),
             1.0,
             &Interaction::default(),
+            &Style::default(),
             &mut MonoMeasure,
         );
         assert!(lay.max_scroll > 0.0);
@@ -1006,7 +1037,14 @@ pub(crate) mod tests {
             scroll: 1e6,
             ..Interaction::default()
         };
-        let end = layout_panel(&v, Size::new(380.0, 600.0), 1.0, &ui, &mut MonoMeasure);
+        let end = layout_panel(
+            &v,
+            Size::new(380.0, 600.0),
+            1.0,
+            &ui,
+            &Style::default(),
+            &mut MonoMeasure,
+        );
         assert!((end.scroll - end.max_scroll).abs() < 0.01);
         assert!(targets(&end.scene).contains(&HitTarget::Activate(NotificationId(20))));
         assert!(!targets(&end.scene).contains(&HitTarget::Activate(NotificationId(1))));
@@ -1019,6 +1057,7 @@ pub(crate) mod tests {
             SIZE,
             1.6,
             &Interaction::default(),
+            &Style::default(),
             &mut MonoMeasure,
         );
         let card = rect_of(&lay.scene, &HitTarget::Activate(NotificationId(1)));

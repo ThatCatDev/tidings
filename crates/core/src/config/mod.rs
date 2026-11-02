@@ -21,11 +21,13 @@ use std::time::Duration;
 use serde::Deserialize;
 use toml::Spanned;
 
+pub mod theme;
+
 use crate::panel::Swipe;
 use crate::policy::ToastPolicy;
 
 /// A commented config file listing every setting at its default.
-pub const TEMPLATE: &str = include_str!("../../../config.example.toml");
+pub const TEMPLATE: &str = include_str!("../../../../config.example.toml");
 
 /// Everything the config file controls.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -76,12 +78,17 @@ impl Default for AnimationConfig {
     }
 }
 
-/// Where colours come from.
+/// The theme, its overrides, and where colours come from.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ThemeConfig {
     /// The colours file, as written (a leading `~/` is the caller's to
     /// expand). `None` uses the standard location.
     pub colors: Option<PathBuf>,
+    /// The theme to use (a file in the themes folder, or a built-in);
+    /// `None` is [`theme::DEFAULT_THEME`].
+    pub name: Option<String>,
+    /// Look settings written in the config itself, layered over the theme.
+    pub look: theme::LookPatch,
 }
 
 /// Accepted ranges, also quoted in error messages.
@@ -157,12 +164,7 @@ impl Config {
             errors: Vec::new(),
         };
         let config = raw.validate(&mut check);
-        if check.errors.is_empty() {
-            Ok(config)
-        } else {
-            check.errors.sort_by_key(|e| (e.line, e.column));
-            Err(ConfigErrors(check.errors))
-        }
+        check.finish(config)
     }
 }
 
@@ -174,7 +176,8 @@ struct RawConfig {
     toasts: RawToasts,
     gestures: RawGestures,
     animation: RawAnimation,
-    theme: RawTheme,
+    #[serde(deserialize_with = "theme::deserialize_section")]
+    theme: theme::ThemeSection,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -200,12 +203,6 @@ struct RawGestures {
 struct RawAnimation {
     enabled: Option<bool>,
     speed: Option<Spanned<f64>>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawTheme {
-    colors: Option<Spanned<String>>,
 }
 
 /// A duration written as text, e.g. `"4s"`, `"1.5s"`, `"250ms"`, `"2m"`.
@@ -253,6 +250,16 @@ struct Checker<'a> {
 }
 
 impl Checker<'_> {
+    /// `value` if nothing was wrong, else every error in file order.
+    fn finish<T>(mut self, value: T) -> Result<T, ConfigErrors> {
+        if self.errors.is_empty() {
+            Ok(value)
+        } else {
+            self.errors.sort_by_key(|e| (e.line, e.column));
+            Err(ConfigErrors(self.errors))
+        }
+    }
+
     fn error(&mut self, span: &Range<usize>, key: &str, message: String) {
         let (line, column) = line_column(self.src, span.start);
         self.errors.push(ConfigError {
@@ -422,7 +429,21 @@ impl RawConfig {
             )),
         };
 
-        let colors = self.theme.colors.and_then(|c| {
+        let t = self.theme;
+        let name = t.name.and_then(|n| {
+            let text = n.get_ref().trim();
+            if theme::is_valid_name(text) {
+                Some(text.to_owned())
+            } else {
+                let msg = format!(
+                    "{text:?} is not a theme name; use letters, digits, - and _ (see `tidings theme list`)"
+                );
+                check.error(&n.span(), "theme.name", msg);
+                None
+            }
+        });
+        let look = t.look.check(check, "theme.");
+        let colors = t.colors.and_then(|c| {
             if c.get_ref().trim().is_empty() {
                 check.error(&c.span(), "theme.colors", "must not be empty".to_owned());
                 None
@@ -435,7 +456,7 @@ impl RawConfig {
             toasts,
             gestures,
             animation,
-            theme: ThemeConfig { colors },
+            theme: ThemeConfig { colors, name, look },
         }
     }
 }

@@ -1,0 +1,32 @@
+# tidings theme: Clear
+#
+# Very transparent. Needs the panel's blur threshold (ignore_alpha in
+# hypr/config/layerrules.lua) below 0.4 to blur at all.
+name = "Clear"
+description = "Barely-there glass held together by crisp light rims."
+
+[panel]
+opacity = 0.4
+border_color = "tint"
+border_opacity = 0.3
+
+[card]
+opacity = 0.05
+hover_opacity = 0.09
+border_opacity = 0.16
+
+[toast]
+opacity = 0.42
+hover_opacity = 0.48
+expanded_opacity = 0.46
+sheen = 0.03
+border_opacity = 0.32
+
+[shadow]
+opacity = 0.16
+size = 8
+offset = 2
+
+[button]
+opacity = 0.08
+hover_opacity = 0.15

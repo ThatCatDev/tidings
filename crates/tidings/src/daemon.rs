@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use tidings_core::clock::Clock;
 use tidings_core::config::Config;
+use tidings_core::look::Look;
 use tidings_core::ui::{UiEvent, UiHandle};
 use tidings_gesture::{GestureReader, ReaderConfig, RecognizerConfig, TrackpadOpener};
 use tokio::sync::mpsc;
@@ -42,6 +43,8 @@ pub struct DaemonConfig {
     pub theme_poll: Duration,
     /// The user's settings (`config.toml`).
     pub settings: Config,
+    /// The look: the chosen theme with the config's overrides.
+    pub look: Look,
 }
 
 impl DaemonConfig {
@@ -54,6 +57,7 @@ impl DaemonConfig {
             colors_path: None,
             theme_poll: POLL_INTERVAL,
             settings: Config::default(),
+            look: Look::default(),
         }
     }
 }
@@ -197,6 +201,7 @@ impl Daemon {
             config.settings.toasts,
             gestures.swipe,
             theme,
+            config.look,
         );
         let actor = tokio::spawn(app.run(rx));
         Ok(Self {

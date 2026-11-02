@@ -27,6 +27,7 @@ use std::sync::mpsc;
 
 use smithay_client_toolkit::reexports::calloop::channel;
 use tidings_core::config::AnimationConfig;
+use tidings_core::look::Look;
 use tidings_core::ui::{UiEvent, UiHandle, UiUpdate};
 
 pub use error::UiError;
@@ -46,17 +47,20 @@ impl UiHandle for ChannelHandle {
 ///
 /// Returns once the connection and globals are set up, so a missing
 /// compositor or protocol is reported here rather than on the thread.
-/// Motion follows the user's `animation` settings. The thread exits on
+/// Motion follows the user's `animation` settings, shapes and type their
+/// `look`. The thread exits on
 /// [`UiUpdate::Shutdown`] or when the handle is dropped.
 pub fn spawn(
     events: mpsc::Sender<UiEvent>,
     animation: AnimationConfig,
+    look: &Look,
 ) -> Result<Box<dyn UiHandle>, UiError> {
     let timing = anim::Timing::new(&animation);
+    let style = style::Style::new(look);
     let (init_tx, init_rx) = mpsc::sync_channel::<Result<channel::Sender<UiUpdate>, UiError>>(1);
     std::thread::Builder::new()
         .name("tidings-ui".into())
-        .spawn(move || match wayland::setup(events, timing) {
+        .spawn(move || match wayland::setup(events, timing, style) {
             Ok((event_loop, app, tx)) => {
                 if init_tx.send(Ok(tx)).is_ok() {
                     wayland::run(event_loop, app);

@@ -1,0 +1,51 @@
+# tidings theme: Paper
+name = "Paper"
+description = "Light, warm off-white paper with a terracotta accent and soft shadows."
+
+[palette]
+mode = "light"
+surface = "#f6f3ec"
+surface_variant = "#ebe6da"
+on_surface = "#2b2924"
+on_surface_variant = "#6e695e"
+primary = "#b4543a"
+on_primary = "#ffffff"
+error = "#b3261e"
+on_error = "#ffffff"
+outline = "#a9a194"
+
+[panel]
+opacity = 0.97
+radius = 16
+border_opacity = 0.4
+blur = false
+
+[card]
+radius = 14
+color = "#ffffff"
+opacity = 0.75
+hover_opacity = 0.95
+border_color = "outline"
+border_opacity = 0.25
+
+[toast]
+radius = 16
+opacity = 0.98
+hover_opacity = 1.0
+expanded_opacity = 1.0
+sheen = 0.0
+border_color = "outline"
+border_opacity = 0.35
+blur = false
+
+[shadow]
+color = "#3d3424"
+opacity = 0.22
+size = 9
+offset = 3
+
+[button]
+radius = 10
+color = "surface_variant"
+opacity = 1.0
+hover_opacity = 0.7
