@@ -346,6 +346,22 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
 
+/// Group morph progress by which the stack's sheets have faded out.
+const MORPH_SHEETS_OUT: f32 = 0.5;
+/// Group morph progress at which the emerging cards start to fade in.
+const MORPH_CARDS_IN: f32 = 0.45;
+
+/// 0 before `from`, 1 after `to`, linear between.
+fn fade(t: f32, from: f32, to: f32) -> f32 {
+    ((t - from) / (to - from)).clamp(0.0, 1.0)
+}
+
+/// The part of `clip` from `y` down.
+fn below(clip: Rect, y: f32) -> Rect {
+    let top = y.max(clip.y);
+    Rect::new(clip.x, top, clip.w, (clip.bottom() - top).max(0.0))
+}
+
 /// Height of a collapsed stack with `top` in front.
 fn stack_height(top: &card::CardLayout, sheets: usize) -> f32 {
     top.height + m::SHEET_PEEK * count(sheets)
@@ -490,26 +506,41 @@ impl GroupLayout {
                 let t = *t;
                 let top_at = Point::new(origin.x, origin.y + m::GROUP_HEADER_HEIGHT * t);
                 header.sprite(scene, view, &g.key, origin, ui, t);
-                sheets_sprite(scene, view, top_at, top, *sheets, &expand, 1.0 - t);
-                // Deepest first, so the top card ends up in front. Each
-                // starts tucked behind the top card, its bottom edge where
-                // its sheet peeks out.
+                // The sheets hand over to the real cards: they fade out over
+                // the first part of the motion, the cards in over the rest.
+                let sheets_alpha = 1.0 - fade(t, 0.0, MORPH_SHEETS_OUT);
+                let cards_alpha = fade(t, MORPH_CARDS_IN, 1.0);
+                sheets_sprite(scene, view, top_at, top, *sheets, &expand, sheets_alpha);
+                // Each card starts tucked behind the top card, its bottom
+                // edge where its sheet peeks out.
                 let tucked_bottom = top_at.y + top.height;
-                let offsets = list_offsets(cards);
-                for (i, ((c, lay), dy)) in g
-                    .cards
+                let tops: Vec<f32> = cards
                     .iter()
-                    .zip(cards)
-                    .zip(offsets)
+                    .zip(list_offsets(cards))
                     .enumerate()
-                    .skip(1)
-                    .rev()
-                {
-                    let peek = m::SHEET_PEEK * count(i.min(m::MAX_SHEETS));
-                    let y = lerp(tucked_bottom + peek - lay.height, origin.y + dy, t);
+                    .map(|(i, (lay, dy))| {
+                        if i == 0 {
+                            return top_at.y;
+                        }
+                        let peek = m::SHEET_PEEK * count(i.min(m::MAX_SHEETS));
+                        lerp(tucked_bottom + peek - lay.height, origin.y + dy, t)
+                    })
+                    .collect();
+                // Deepest first, so the top card ends up in front. Each card
+                // shows only below the one in front of it, so translucent
+                // cards never stack their text.
+                for i in (1..cards.len()).rev() {
+                    let (Some(c), Some(lay), Some(&y)) =
+                        (g.cards.get(i), cards.get(i), tops.get(i))
+                    else {
+                        continue;
+                    };
+                    let front_bottom = tops[i - 1] + cards[i - 1].height;
                     let hits = scene.hits.len();
+                    scene.push(Node::PushClip(below(view.clip, front_bottom)));
                     let at = Point::new(origin.x, y);
-                    card_sprite(scene, view, c, lay, at, &list_opts(c), t);
+                    card_sprite(scene, view, c, lay, at, &list_opts(c), cards_alpha);
+                    scene.push(Node::PopClip);
                     if !g.expanded {
                         // Folding away: nothing to click on.
                         scene.hits.truncate(hits);
@@ -855,6 +886,34 @@ pub(crate) mod tests {
         assert!(has_opacity(&mid));
         assert!(targets(&mid).contains(&HitTarget::Activate(NotificationId(2))));
         assert!(targets(&mid).contains(&HitTarget::CollapseGroup("chat".into())));
+    }
+
+    #[test]
+    fn emerging_cards_fade_in_late_below_the_card_in_front() {
+        let drawn = |s: &Scene, text: &str| {
+            s.flat_nodes()
+                .iter()
+                .any(|n| matches!(n, Node::Text { text: t, .. } if t == text))
+        };
+        let (_, early) = below_chat(true, Some(0.3));
+        assert!(!drawn(&early, "Summary 2"), "not yet faded in");
+        let (_, late) = below_chat(true, Some(0.8));
+        assert!(drawn(&late, "Summary 2"));
+        // Card 2 (drawn last of the emerging cards) is clipped to below
+        // card 3, wherever card 3 is.
+        let top_bottom = late
+            .hits
+            .iter()
+            .find(|h| h.target == HitTarget::Activate(NotificationId(3)))
+            .map_or(f32::NAN, |h| h.rect.bottom());
+        let clip_top = late.nodes.iter().rev().find_map(|n| match n {
+            Node::PushClip(r) if r.y > 60.0 => Some(r.y),
+            _ => None,
+        });
+        assert!(
+            clip_top.is_some_and(|y| (y - top_bottom).abs() < 1.0),
+            "{clip_top:?} vs {top_bottom}"
+        );
     }
 
     #[test]
