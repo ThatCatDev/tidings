@@ -60,9 +60,10 @@ pub enum Node {
         cutout: Rect,
         cutout_radius: f32,
     },
-    /// A soft drop shadow around a rounded `rect`: `fill` at its peak right
-    /// at the shape's edge, fading to nothing `spread` beyond it, shifted
-    /// down by `offset_y`. Nothing is painted inside `rect` itself, so a
+    /// A soft drop shadow: `rect` (a rounded rect) Gaussian-blurred, shifted
+    /// down by `offset_y`. `fill` is the opacity of the unblurred shape, so
+    /// the shadow is half that at the edge and fades out over `spread`
+    /// (three standard deviations). Nothing is painted inside `rect` itself, so a
     /// translucent shape on top never darkens.
     Shadow {
         rect: Rect,

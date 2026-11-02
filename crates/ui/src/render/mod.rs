@@ -11,10 +11,10 @@ pub use self::text::TextEngine;
 
 use tiny_skia::{
     Color, FillRule, FilterQuality, LineCap, LineJoin, Mask, Paint, Path, PathBuilder, Pattern,
-    Pixmap, PixmapPaint, SpreadMode, Stroke, Transform,
+    Pixmap, PixmapPaint, PremultipliedColorU8, SpreadMode, Stroke, Transform,
 };
 
-use crate::geom::{PxRect, Rect, physical_len, u32_to_f32};
+use crate::geom::{PxRect, Rect, f32_to_u32, physical_len, u32_to_f32};
 use crate::scene::{Align, GlyphKind, Monogram, Node, Scene};
 use crate::style::{Fill, Palette, Rgba, TextStyle, fills, monogram_colors};
 
@@ -350,8 +350,12 @@ struct Shadow {
 }
 
 impl Shadow {
-    const LAYERS: u8 = 8;
-
+    /// Paints the shadow as a Gaussian-blurred copy of the shape (shifted
+    /// down by `offset_y`), computed per pixel from the distance to the
+    /// shape's rounded edge. At the edge it is half of `peak`, as a real blur
+    /// of a solid shape is, and it fades smoothly over `spread` (three
+    /// standard deviations): a soft drop shadow, not a dark ring hugging
+    /// the outline.
     fn paint(&self, pm: &mut Pixmap, peak: Rgba, ctx: &Ctx<'_>) {
         if peak.a <= 0.0 || self.spread <= 0.0 {
             return;
@@ -361,26 +365,96 @@ impl Shadow {
         else {
             return;
         };
-        let n = f32::from(Self::LAYERS);
-        // Per-layer alpha so the innermost band, covered by every layer,
-        // composites to exactly `peak`.
-        let layer = Rgba {
-            a: 1.0 - (1.0 - peak.a).powf(1.0 / n),
-            ..peak
-        };
+        let scale = ctx.scale;
         let base = self.rect.translate(0.0, self.offset_y);
-        for i in 1..=Self::LAYERS {
-            let d = self.spread * f32::from(i) / n;
-            fill_round_rect(
-                pm,
-                base.outset(d),
-                self.radius + d,
-                layer,
-                ctx.scale,
-                Some(&mask),
-            );
+        let (cx, cy) = (
+            (base.x + base.w / 2.0) * scale,
+            (base.y + base.h / 2.0) * scale,
+        );
+        let (hw, hh) = (base.w / 2.0 * scale, base.h / 2.0 * scale);
+        let radius = (self.radius * scale).min(hw).min(hh);
+        let reach = self.spread * scale;
+        let sigma = reach / 3.0;
+
+        let (width, height) = (pm.width(), pm.height());
+        let span = |lo: f32, hi: f32, max: u32| {
+            (
+                f32_to_u32(lo.floor().max(0.0)).min(max),
+                f32_to_u32(hi.ceil().max(0.0)).min(max),
+            )
+        };
+        let (x0, x1) = span(cx - hw - reach, cx + hw + reach, width);
+        let (y0, y1) = span(cy - hh - reach, cy + hh + reach, height);
+        let coverage_mask = mask.data();
+        let pixels = pm.pixels_mut();
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let Ok(idx) = usize::try_from(y * width + x) else {
+                    continue;
+                };
+                let inside = coverage_mask.get(idx).copied().unwrap_or(0);
+                if inside == 0 {
+                    continue;
+                }
+                let d = rounded_rect_distance(
+                    u32_to_f32(x) + 0.5 - cx,
+                    u32_to_f32(y) + 0.5 - cy,
+                    hw,
+                    hh,
+                    radius,
+                );
+                if d > reach {
+                    continue;
+                }
+                let a = peak.a * blurred_edge_coverage(d, sigma) * f32::from(inside) / 255.0;
+                if let Some(px) = pixels.get_mut(idx) {
+                    *px = blend_over(*px, peak, a);
+                }
+            }
         }
     }
+}
+
+/// Signed distance from a point (relative to the centre) to a rounded rect
+/// with half-extents `hw` x `hh` and corner `radius`: negative inside.
+fn rounded_rect_distance(x: f32, y: f32, hw: f32, hh: f32, radius: f32) -> f32 {
+    let qx = x.abs() - (hw - radius);
+    let qy = y.abs() - (hh - radius);
+    qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - radius
+}
+
+/// How much of a Gaussian-blurred (standard deviation `sigma`) solid edge
+/// covers a point `d` outside it: 0.5 on the edge, toward 0 further out.
+fn blurred_edge_coverage(d: f32, sigma: f32) -> f32 {
+    0.5 * erfc(d / (sigma * std::f32::consts::SQRT_2))
+}
+
+/// Complementary error function (Abramowitz & Stegun 7.1.26, |error| < 1.5e-7).
+fn erfc(x: f32) -> f32 {
+    let z = x.abs();
+    let t = 1.0 / (1.0 + 0.327_591_1 * z);
+    let poly = t
+        * (0.254_829_6
+            + t * (-0.284_496_74 + t * (1.421_413_7 + t * (-1.453_152_1 + t * 1.061_405_4))));
+    let tail = poly * (-z * z).exp();
+    if x >= 0.0 { tail } else { 2.0 - tail }
+}
+
+/// Source-over of `color` at opacity `a` onto a premultiplied pixel.
+fn blend_over(dst: PremultipliedColorU8, color: Rgba, a: f32) -> PremultipliedColorU8 {
+    let a = a.clamp(0.0, 1.0);
+    let keep = 1.0 - a;
+    let channel = |src: f32, dst: u8| unit_to_u8(src * a + f32::from(dst) / 255.0 * keep);
+    let out_a = unit_to_u8(a + f32::from(dst.alpha()) / 255.0 * keep);
+    let r = channel(color.r, dst.red()).min(out_a);
+    let g = channel(color.g, dst.green()).min(out_a);
+    let b = channel(color.b, dst.blue()).min(out_a);
+    PremultipliedColorU8::from_rgba(r, g, b, out_a).unwrap_or(dst)
+}
+
+/// 0.0..=1.0 to a byte, rounded.
+fn unit_to_u8(v: f32) -> u8 {
+    u8::try_from(f32_to_u32((v.clamp(0.0, 1.0) * 255.0).round())).unwrap_or(u8::MAX)
 }
 
 /// Fill and/or 1 px stroke of a rounded rect.
@@ -664,5 +738,61 @@ mod tests {
     fn rounded_paths_are_valid() {
         assert!(rounded_rect_px(0.0, 0.0, 10.0, 10.0, 50.0).is_some());
         assert!(rounded_rect_px(0.0, 0.0, 0.0, 10.0, 2.0).is_none());
+    }
+
+    #[test]
+    fn rounded_rect_distance_is_signed() {
+        // 20x10 rect (half-extents 10 x 5), corner radius 2.
+        let d = |x, y| rounded_rect_distance(x, y, 10.0, 5.0, 2.0);
+        assert!((d(13.0, 0.0) - 3.0).abs() < 1e-4, "right of the edge");
+        assert!((d(0.0, -7.0) - 2.0).abs() < 1e-4, "above the edge");
+        assert!((d(0.0, 0.0) + 5.0).abs() < 1e-4, "centre is inside");
+        // The corner is round: diagonal distance from the corner centre (8, 3).
+        let expect = 4.0f32.hypot(4.0) - 2.0;
+        assert!((d(12.0, 7.0) - expect).abs() < 1e-4);
+    }
+
+    #[test]
+    fn blurred_edge_is_half_on_the_edge_and_fades_out() {
+        assert!((erfc(0.0) - 1.0).abs() < 1e-6);
+        assert!((erfc(1.0) - 0.157_299_2).abs() < 1e-5);
+        assert!((erfc(-1.0) - 1.842_700_8).abs() < 1e-5);
+        let c = |d| blurred_edge_coverage(d, 3.0);
+        assert!((c(0.0) - 0.5).abs() < 1e-6);
+        assert!(c(-3.0) > 0.8 && c(3.0) < 0.2);
+        assert!(c(9.0) < 0.002, "faded out at three sigma");
+        assert!(c(1.0) > c(2.0) && c(2.0) > c(4.0));
+    }
+
+    #[test]
+    fn shadow_is_a_soft_drop_shadow_not_a_ring() {
+        let card = Rect::new(20.0, 20.0, 100.0, 40.0);
+        let mut scene = Scene::new(Size::new(140.0, 80.0));
+        scene.push(Node::Shadow {
+            rect: card,
+            radius: 20.0,
+            spread: 9.0,
+            offset_y: 3.0,
+            fill: Fill::new(crate::style::Role::Shadow, 0.3),
+        });
+        let pm = painter()
+            .paint(&scene, &Palette::default(), 1.0)
+            .unwrap_or_else(|| panic!("pixmap"));
+        let alpha = |x: u32, y: u32| {
+            pm.pixel(x, y)
+                .map_or(0, tiny_skia::PremultipliedColorU8::alpha)
+        };
+        // Below the card: strongest next to it, fading steadily outward.
+        let below: Vec<u8> = (60..70).map(|y| alpha(70, y)).collect();
+        assert!(below.windows(2).all(|w| w[0] >= w[1]), "{below:?}");
+        assert!(below[0] <= 77, "no more than ~0.3 even below: {}", below[0]);
+        // Offset down: lighter above the card than below it.
+        assert!(alpha(70, 18) < alpha(70, 61));
+        // Beside the card, 1.5 px out (pixel centre): the blurred-edge value.
+        let side = f32::from(alpha(121, 40));
+        let expect = 255.0 * 0.3 * blurred_edge_coverage(1.5, 3.0);
+        assert!((side - expect).abs() <= 3.0, "{side} vs {expect}");
+        // Never under the card itself.
+        assert_eq!(alpha(70, 40), 0);
     }
 }

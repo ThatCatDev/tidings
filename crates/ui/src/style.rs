@@ -290,10 +290,12 @@ pub mod toast_glass {
     pub const TOAST_SHEEN_ALPHA: f32 = 0.04;
     /// The 1 px light rim around every toast.
     pub const TOAST_RIM_ALPHA: f32 = 0.16;
-    /// Peak opacity of the drop shadow, right at the toast's edge. Must stay
-    /// below Hyprland's `ignore_alpha` (and so below [`TOAST_ALPHA`]).
+    /// Opacity of the (unblurred) shadow shape; the soft shadow is at most
+    /// half this at the toast's edge. Must stay below Hyprland's
+    /// `ignore_alpha` (and so below [`TOAST_ALPHA`]).
     pub const SHADOW_ALPHA: f32 = 0.28;
-    /// How far the shadow fades out beyond the toast's edge (logical px).
+    /// How far the shadow fades out beyond the toast's edge (logical px):
+    /// three standard deviations of its blur.
     pub const SHADOW_SPREAD: f32 = 9.0;
     /// Downward shift of the shadow (logical px).
     pub const SHADOW_OFFSET_Y: f32 = 3.0;
