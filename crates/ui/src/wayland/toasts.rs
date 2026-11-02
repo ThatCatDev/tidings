@@ -7,7 +7,7 @@ use tidings_core::model::NotificationId;
 use tidings_core::view::ToastView;
 use tiny_skia::Pixmap;
 
-use crate::anim::ToastMotion;
+use crate::anim::{Timing, ToastMotion};
 use crate::geom::{Point, Rect, f32_to_i32};
 use crate::layout::{ToastLayout, layout_toast, stack_offsets};
 use crate::render::{Painter, blit};
@@ -39,6 +39,15 @@ pub struct ToastStack {
 }
 
 impl ToastStack {
+    /// An empty stack whose toasts move with `timing`.
+    #[must_use]
+    pub fn new(timing: Timing) -> Self {
+        Self {
+            motion: ToastMotion::new(timing),
+            ..Self::default()
+        }
+    }
+
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.items.is_empty() && self.ghosts.is_empty()

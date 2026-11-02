@@ -57,7 +57,7 @@ Dependency direction: `tidings -> {core, gesture, ui}`, `gesture -> core`, `ui -
 - Top-right below the bar: top margin 52 logical px, right margin 12, width 360. At most 4 visible, newest on top.
 - Compact pill: 58 logical px tall (radius 29), round 40 px icon, a bold one-line summary over one line of body, then the time and a round 28 px expand (⌄) button (with a dot when the notification has actions). Hover tints the glass and shows a "×" over the icon.
 - Expanded: the full card (app name + time, summary, body up to 6 lines, action buttons) with the icon level with the app-name row and a collapse (⌃) button in the top-right corner. The stack re-flows when a toast grows or shrinks. The UI sends `SetToastExpanded`.
-- Expiry: low 4 s, normal 6 s, critical never. A positive client timeout wins; 0 means never. Hover or expansion pauses expiry; it resumes with the remaining time once the toast is neither. A replaced notification keeps its expanded state. Expired toasts stay in the panel history (unless `transient`).
+- Expiry: low 4 s, normal 6 s, critical never (all configurable). A positive client timeout wins; 0 means never. Hover or expansion pauses expiry; it resumes with the remaining time once the toast is neither. A replaced notification keeps its expanded state. Expired toasts stay in the panel history (unless `transient`).
 - Glass: far more transparent than the panel (alpha 0.46 at rest), with a 1 px light rim and a soft shadow whose alpha stays below 0.3, so a Hyprland `ignore_alpha` of 0.4 blurs the glass but not the shadow.
 - Click on the body → `default` action (if any), then dismiss. Close button and action buttons.
 - Do Not Disturb suppresses toasts, except critical ones.
@@ -90,6 +90,19 @@ Dependency direction: `tidings -> {core, gesture, ui}`, `gesture -> core`, `ui -
 - The `tidings` binary with no args (or `tidings daemon`) runs the daemon.
 - `tidings ctl <cmd>` talks to `$XDG_RUNTIME_DIR/tidings.sock` (line-based request/response). Commands: `toggle | open | close | clear-all | dnd [on|off|toggle] | count | is-open | gesture <begin open|begin close|update P|end P V|cancel>`. The gesture command is for tests: it injects GestureEvents.
 - Exit codes: 0 ok, 1 error, 2 daemon not running.
+
+### Config file
+- `~/.config/tidings/config.toml` (override: `TIDINGS_CONFIG`). Read at startup. Schema, parsing and validation live in `tidings_core::config`; the file system side is in `tidings::config_file`.
+- **Validation runs in two stages.**
+  1. serde reads the TOML into raw structs that mirror the file. `deny_unknown_fields` makes a typo an error, and serde enforces the TOML types.
+  2. Each value is validated (durations parse, numbers in range) into the typed `Config`. Every value error is collected, not just the first. Values are `toml::Spanned`, so each error carries a line and column.
+- An invalid file is logged and the defaults apply: a config mistake must never cost the user their notifications. `tidings config check` exits 1 on errors.
+- `config.example.toml` is the template (`tidings config default`); a test pins it to `Config::default()`, so docs and defaults cannot drift.
+- Settings reach their owners at startup:
+  - toasts → `ToastPolicy`
+  - gestures → `RecognizerConfig.edge` and `panel::Swipe`
+  - animation → `tidings_ui::anim::Timing`, which scales every duration and the spring by `speed`, or makes everything instant
+  - theme.colors → the colours watcher (`TIDINGS_COLORS` still wins)
 
 ### Theme
 - `~/.config/tidings/colors.json` (override: `TIDINGS_COLORS`), watched for changes (inotify via `notify` crate or polling mtime ~1 s). Invalid or missing file → built-in dark defaults.

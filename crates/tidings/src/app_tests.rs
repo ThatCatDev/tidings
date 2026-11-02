@@ -64,7 +64,12 @@ impl Harness {
             signals: Box::new(rec.clone()),
             panel_state: Box::new(rec.clone()),
         };
-        let app = App::new(deps, ToastPolicy::default(), Theme::default());
+        let app = App::new(
+            deps,
+            ToastPolicy::default(),
+            Swipe::default(),
+            Theme::default(),
+        );
         Self { app, rec, clock }
     }
 
@@ -617,7 +622,7 @@ async fn run_loop_expires_toasts_on_its_own_timer() {
         normal_timeout: Duration::from_millis(20),
         ..ToastPolicy::default()
     };
-    let app = App::new(deps, policy, Theme::default());
+    let app = App::new(deps, policy, Swipe::default(), Theme::default());
     let (tx, rx) = mpsc::unbounded_channel();
     let actor = tokio::spawn(app.run(rx));
     let (reply, id) = oneshot::channel();

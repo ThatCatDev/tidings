@@ -14,7 +14,7 @@ use std::time::Duration;
 use tidings_core::clock::Clock;
 use tidings_core::gesture::GestureEvent;
 use tidings_core::model::{CloseReason, Notification, NotificationId};
-use tidings_core::panel::Panel;
+use tidings_core::panel::{Panel, Swipe};
 use tidings_core::policy::ToastPolicy;
 use tidings_core::store::Store;
 use tidings_core::theme::Theme;
@@ -128,11 +128,11 @@ impl fmt::Debug for App {
 impl App {
     /// Creates the actor and pushes the initial theme and (empty) view to the UI.
     #[must_use]
-    pub fn new(deps: AppDeps, policy: ToastPolicy, theme: Theme) -> Self {
+    pub fn new(deps: AppDeps, policy: ToastPolicy, swipe: Swipe, theme: Theme) -> Self {
         let mut app = Self {
             store: Store::default(),
             toasts: Toasts::new(policy.max_visible),
-            panel: Panel::default(),
+            panel: Panel::new(swipe),
             policy,
             dnd: false,
             deps,

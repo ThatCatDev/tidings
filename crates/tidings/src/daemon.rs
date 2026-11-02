@@ -7,9 +7,9 @@ use std::sync::mpsc as std_mpsc;
 use std::time::Duration;
 
 use tidings_core::clock::Clock;
-use tidings_core::policy::ToastPolicy;
+use tidings_core::config::Config;
 use tidings_core::ui::{UiEvent, UiHandle};
-use tidings_gesture::{GestureReader, ReaderConfig, TrackpadOpener};
+use tidings_gesture::{GestureReader, ReaderConfig, RecognizerConfig, TrackpadOpener};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use zbus::fdo::{RequestNameFlags, RequestNameReply};
@@ -40,10 +40,8 @@ pub struct DaemonConfig {
     pub colors_path: Option<PathBuf>,
     /// How often the colours file is polled.
     pub theme_poll: Duration,
-    /// Read the trackpad for edge-swipe gestures.
-    pub gestures: bool,
-    /// Toast timing and limits.
-    pub policy: ToastPolicy,
+    /// The user's settings (`config.toml`).
+    pub settings: Config,
 }
 
 impl DaemonConfig {
@@ -55,8 +53,7 @@ impl DaemonConfig {
             socket_path,
             colors_path: None,
             theme_poll: POLL_INTERVAL,
-            gestures: true,
-            policy: ToastPolicy::default(),
+            settings: Config::default(),
         }
     }
 }
@@ -152,11 +149,18 @@ impl Daemon {
         let ui = ui_factory(ui_tx).map_err(DaemonError::Ui)?;
         bridge_ui_events(ui_rx, events.clone()).map_err(|e| DaemonError::Ui(Box::new(e)))?;
 
-        let panel_state: Box<dyn PanelStateSink> = if config.gestures {
+        let gestures = config.settings.gestures;
+        let panel_state: Box<dyn PanelStateSink> = if gestures.enabled {
             let tx = events.clone();
             let reader = GestureReader::spawn(
                 TrackpadOpener::default(),
-                ReaderConfig::default(),
+                ReaderConfig {
+                    recognizer: RecognizerConfig {
+                        edge: gestures.edge_zone,
+                        ..RecognizerConfig::default()
+                    },
+                    ..ReaderConfig::default()
+                },
                 move |g| {
                     if tx.send(AppEvent::Gesture(g)).is_ok() {
                         std::ops::ControlFlow::Continue(())
@@ -190,7 +194,8 @@ impl Daemon {
                 signals: Box::new(signals),
                 panel_state,
             },
-            config.policy,
+            config.settings.toasts,
+            gestures.swipe,
             theme,
         );
         let actor = tokio::spawn(app.run(rx));

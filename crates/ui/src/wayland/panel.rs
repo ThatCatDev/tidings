@@ -6,7 +6,7 @@ use std::time::Instant;
 use tidings_core::view::ViewModel;
 use tiny_skia::Pixmap;
 
-use crate::anim::{GroupMotion, PanelMotion, panel_opacity};
+use crate::anim::{GroupMotion, PanelMotion, Timing, panel_opacity};
 use crate::geom::{Point, PxRect, Rect, Size, f32_to_i32, i32_to_f32};
 use crate::layout::{Interaction, PanelLayout, layout_panel};
 use crate::render::{Painter, blit};
@@ -43,6 +43,16 @@ pub struct PanelView {
 }
 
 impl PanelView {
+    /// A closed panel whose slide and group morphs move with `timing`.
+    #[must_use]
+    pub fn new(timing: Timing) -> Self {
+        Self {
+            motion: PanelMotion::new(timing.panel_omega),
+            groups: GroupMotion::new(timing.group_morph),
+            ..Self::default()
+        }
+    }
+
     /// Horizontal offset of the sheet inside the surface, in logical px.
     #[must_use]
     pub fn offset(&self) -> f32 {

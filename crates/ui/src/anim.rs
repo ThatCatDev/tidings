@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+use tidings_core::config::AnimationConfig;
 use tidings_core::model::NotificationId;
 
 /// Cubic ease-out: fast start, gentle stop.
@@ -102,19 +103,28 @@ pub struct PanelMotion {
     /// Smoothed tracking velocity (openness/s), handed to the spring.
     velocity: f32,
     phase: Phase,
+    /// Spring stiffness; `None` snaps straight to the target.
+    omega: Option<f32>,
 }
 
 impl Default for PanelMotion {
     fn default() -> Self {
-        Self {
-            openness: 0.0,
-            velocity: 0.0,
-            phase: Phase::Idle,
-        }
+        Self::new(Timing::default().panel_omega)
     }
 }
 
 impl PanelMotion {
+    /// A closed panel springing with stiffness `omega` (`None`: no animation).
+    #[must_use]
+    pub fn new(omega: Option<f32>) -> Self {
+        Self {
+            openness: 0.0,
+            velocity: 0.0,
+            phase: Phase::Idle,
+            omega,
+        }
+    }
+
     #[must_use]
     pub fn openness(&self) -> f32 {
         self.openness
@@ -157,13 +167,15 @@ impl PanelMotion {
             }
             _ => 0.0,
         };
-        if (self.openness - target).abs() < f32::EPSILON && velocity.abs() < Spring::EPS_V {
+        let at_rest =
+            (self.openness - target).abs() < f32::EPSILON && velocity.abs() < Spring::EPS_V;
+        let Some(omega) = self.omega.filter(|_| !at_rest) else {
             self.openness = target;
             self.phase = Phase::Idle;
             return Some(target >= 0.5);
-        }
+        };
         self.phase = Phase::Animating {
-            spring: Spring::new(self.openness, velocity, target, Spring::PANEL_OMEGA),
+            spring: Spring::new(self.openness, velocity, target, omega),
             last: now,
         };
         None
@@ -199,21 +211,76 @@ pub const TOAST_MOVE: Duration = Duration::from_millis(240);
 /// Horizontal travel of the enter/leave slide, in logical px.
 pub const TOAST_SLIDE: f32 = 48.0;
 
+/// How long every UI motion takes: the built-in durations, sped up or
+/// slowed down (or switched off) by the user's [`AnimationConfig`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Timing {
+    pub toast_enter: Duration,
+    pub toast_leave: Duration,
+    pub toast_move: Duration,
+    pub group_morph: Duration,
+    /// Panel spring stiffness; `None` snaps.
+    pub panel_omega: Option<f32>,
+}
+
+impl Default for Timing {
+    fn default() -> Self {
+        Self {
+            toast_enter: TOAST_ENTER,
+            toast_leave: TOAST_LEAVE,
+            toast_move: TOAST_MOVE,
+            group_morph: GROUP_MORPH,
+            panel_omega: Some(Spring::PANEL_OMEGA),
+        }
+    }
+}
+
+impl Timing {
+    /// The defaults at `config.speed`, or all instant when disabled.
+    #[must_use]
+    pub fn new(config: &AnimationConfig) -> Self {
+        let base = Self::default();
+        if !config.enabled {
+            return Self {
+                toast_enter: Duration::ZERO,
+                toast_leave: Duration::ZERO,
+                toast_move: Duration::ZERO,
+                group_morph: Duration::ZERO,
+                panel_omega: None,
+            };
+        }
+        let speed = config.speed.max(f32::EPSILON);
+        Self {
+            toast_enter: base.toast_enter.div_f32(speed),
+            toast_leave: base.toast_leave.div_f32(speed),
+            toast_move: base.toast_move.div_f32(speed),
+            group_morph: base.group_morph.div_f32(speed),
+            // A spring settles in time proportional to 1/omega.
+            panel_omega: base.panel_omega.map(|w| w * speed),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Glide {
     from: f32,
     to: f32,
     start: Instant,
+    dur: Duration,
 }
 
 impl Glide {
     fn at(&self, now: Instant) -> f32 {
-        let t = progress(self.start, now, TOAST_MOVE);
+        let t = progress(self.start, now, self.dur);
         self.from + (self.to - self.from) * ease_out_cubic(t)
     }
 }
 
+/// Fraction of `dur` elapsed since `start` (an empty duration is done).
 fn progress(start: Instant, now: Instant, dur: Duration) -> f32 {
+    if dur.is_zero() {
+        return 1.0;
+    }
     (now.saturating_duration_since(start).as_secs_f32() / dur.as_secs_f32()).clamp(0.0, 1.0)
 }
 
@@ -248,9 +315,19 @@ struct Leaving {
 pub struct ToastMotion {
     live: Vec<Live>,
     leaving: Vec<Leaving>,
+    timing: Timing,
 }
 
 impl ToastMotion {
+    /// An empty stack animating with `timing`.
+    #[must_use]
+    pub fn new(timing: Timing) -> Self {
+        Self {
+            timing,
+            ..Self::default()
+        }
+    }
+
     /// Sets the stack's target slots (`(id, y)`, newest first). New ids slide
     /// in, moved ids glide, missing ids start leaving. Returns the ids that
     /// started leaving (callers keep their rendering until they finish).
@@ -280,6 +357,7 @@ impl ToastMotion {
                         from: l.glide.at(now),
                         to: y,
                         start: now,
+                        dur: self.timing.toast_move,
                     },
                 },
                 None => Live {
@@ -289,6 +367,7 @@ impl ToastMotion {
                         from: y,
                         to: y,
                         start: now,
+                        dur: self.timing.toast_move,
                     },
                 },
             };
@@ -302,7 +381,7 @@ impl ToastMotion {
         let (done, keep): (Vec<_>, Vec<_>) = self
             .leaving
             .drain(..)
-            .partition(|l| now.saturating_duration_since(l.start) >= TOAST_LEAVE);
+            .partition(|l| now.saturating_duration_since(l.start) >= self.timing.toast_leave);
         self.leaving = keep;
         done.into_iter().map(|l| l.id).collect()
     }
@@ -311,7 +390,7 @@ impl ToastMotion {
     #[must_use]
     pub fn frames(&self, now: Instant) -> Vec<ToastFrame> {
         let leaving = self.leaving.iter().map(|l| {
-            let t = ease_out_cubic(progress(l.start, now, TOAST_LEAVE));
+            let t = ease_out_cubic(progress(l.start, now, self.timing.toast_leave));
             ToastFrame {
                 id: l.id,
                 y: l.y,
@@ -321,7 +400,7 @@ impl ToastMotion {
             }
         });
         let live = self.live.iter().map(|l| {
-            let t = ease_out_cubic(progress(l.born, now, TOAST_ENTER));
+            let t = ease_out_cubic(progress(l.born, now, self.timing.toast_enter));
             ToastFrame {
                 id: l.id,
                 y: l.glide.at(now),
@@ -338,8 +417,8 @@ impl ToastMotion {
     pub fn is_animating(&self, now: Instant) -> bool {
         !self.leaving.is_empty()
             || self.live.iter().any(|l| {
-                now.saturating_duration_since(l.born) < TOAST_ENTER
-                    || now.saturating_duration_since(l.glide.start) < TOAST_MOVE
+                now.saturating_duration_since(l.born) < self.timing.toast_enter
+                    || now.saturating_duration_since(l.glide.start) < l.glide.dur
             })
     }
 }
@@ -373,14 +452,32 @@ impl Tween {
 /// Fed every group's expanded flag; when one flips, its expansion
 /// (0 = stack, 1 = list) eases towards the new state, starting from
 /// wherever a running morph had got to.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GroupMotion {
     /// Last known expanded flag per group key.
     expanded: HashMap<String, bool>,
     running: HashMap<String, Tween>,
+    /// A full stack-to-list morph.
+    duration: Duration,
+}
+
+impl Default for GroupMotion {
+    fn default() -> Self {
+        Self::new(GROUP_MORPH)
+    }
 }
 
 impl GroupMotion {
+    /// No groups yet; a full morph takes `duration`.
+    #[must_use]
+    pub fn new(duration: Duration) -> Self {
+        Self {
+            expanded: HashMap::new(),
+            running: HashMap::new(),
+            duration,
+        }
+    }
+
     /// Records the current flags and starts a morph for every group whose
     /// flag changed. New groups appear in place; vanished ones are forgotten.
     pub fn sync<'a>(&mut self, groups: impl IntoIterator<Item = (&'a str, bool)>, now: Instant) {
@@ -402,7 +499,7 @@ impl GroupMotion {
                         from,
                         to,
                         start: now,
-                        dur: GROUP_MORPH.mul_f32((to - from).abs()),
+                        dur: self.duration.mul_f32((to - from).abs()),
                     },
                 );
             }
@@ -436,6 +533,43 @@ impl GroupMotion {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timing_follows_the_animation_settings() {
+        let fast = Timing::new(&AnimationConfig {
+            enabled: true,
+            speed: 2.0,
+        });
+        assert_eq!(fast.group_morph, GROUP_MORPH / 2);
+        assert_eq!(fast.toast_enter, TOAST_ENTER / 2);
+        assert_eq!(fast.panel_omega, Some(Spring::PANEL_OMEGA * 2.0));
+        assert_eq!(Timing::new(&AnimationConfig::default()), Timing::default());
+    }
+
+    #[test]
+    fn disabled_animation_is_instant() {
+        let off = Timing::new(&AnimationConfig {
+            enabled: false,
+            speed: 1.0,
+        });
+        let t0 = Instant::now();
+
+        let mut panel = PanelMotion::new(off.panel_omega);
+        assert_eq!(panel.animate_to(1.0, t0), Some(true), "settles at once");
+        assert!((panel.openness() - 1.0).abs() < f32::EPSILON);
+
+        let mut toasts = ToastMotion::new(off);
+        toasts.sync(&[(NotificationId(1), 0.0)], t0);
+        assert!(!toasts.is_animating(t0));
+        assert!((toasts.frames(t0)[0].alpha - 1.0).abs() < f32::EPSILON);
+        toasts.sync(&[], t0);
+        assert_eq!(toasts.reap(t0), vec![NotificationId(1)]);
+
+        let mut groups = GroupMotion::new(off.group_morph);
+        groups.sync([("g", false)], t0);
+        groups.sync([("g", true)], t0);
+        assert!(!groups.is_animating(t0));
+    }
 
     #[test]
     fn group_morph_runs_both_ways_and_reverses_midway() {

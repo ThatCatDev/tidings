@@ -6,37 +6,58 @@
 use crate::gesture::{GestureEvent, GestureKind};
 use crate::ui::PanelCommand;
 
-/// Progress (fraction of pad width) at which the panel is fully out.
+/// Default progress (fraction of pad width) at which the panel is fully out.
 pub const FULL_TRAVEL: f32 = 0.30;
-/// A release faster than this (pad widths/s) toward completion always completes.
+/// Default flick speed (pad widths/s): a faster release decides by
+/// direction alone.
 pub const FLICK_VELOCITY: f32 = 0.6;
 
-/// Panel openness for a gesture's progress: `clamp(progress / 0.30, 0, 1)`
-/// for Open, and one minus that for Close.
-#[must_use]
-pub fn openness(kind: GestureKind, progress: f32) -> f32 {
-    let fraction = completion(progress);
-    match kind {
-        GestureKind::Open => fraction,
-        GestureKind::Close => 1.0 - fraction,
+/// How a swipe's progress maps onto the panel.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Swipe {
+    /// Progress (fraction of pad width) at which the panel is fully out.
+    pub full_travel: f32,
+    /// A release faster than this (pad widths/s) decides by direction alone.
+    pub flick_velocity: f32,
+}
+
+impl Default for Swipe {
+    fn default() -> Self {
+        Self {
+            full_travel: FULL_TRAVEL,
+            flick_velocity: FLICK_VELOCITY,
+        }
     }
 }
 
-/// Whether a released gesture completes: a flick either way decides,
-/// otherwise it completes past halfway.
-#[must_use]
-pub fn completes(progress: f32, velocity: f32) -> bool {
-    if velocity > FLICK_VELOCITY {
-        true
-    } else if velocity < -FLICK_VELOCITY {
-        false
-    } else {
-        completion(progress) > 0.5
+impl Swipe {
+    /// Panel openness for a gesture's progress:
+    /// `clamp(progress / full_travel, 0, 1)` for Open, one minus that for Close.
+    #[must_use]
+    pub fn openness(self, kind: GestureKind, progress: f32) -> f32 {
+        let fraction = self.completion(progress);
+        match kind {
+            GestureKind::Open => fraction,
+            GestureKind::Close => 1.0 - fraction,
+        }
     }
-}
 
-fn completion(progress: f32) -> f32 {
-    (progress / FULL_TRAVEL).clamp(0.0, 1.0)
+    /// Whether a released gesture completes: a flick either way decides,
+    /// otherwise it completes past halfway.
+    #[must_use]
+    pub fn completes(self, progress: f32, velocity: f32) -> bool {
+        if velocity > self.flick_velocity {
+            true
+        } else if velocity < -self.flick_velocity {
+            false
+        } else {
+            self.completion(progress) > 0.5
+        }
+    }
+
+    fn completion(self, progress: f32) -> f32 {
+        (progress / self.full_travel).clamp(0.0, 1.0)
+    }
 }
 
 fn rest(open: bool) -> f32 {
@@ -49,9 +70,19 @@ fn rest(open: bool) -> f32 {
 pub struct Panel {
     open: bool,
     dragging: Option<GestureKind>,
+    swipe: Swipe,
 }
 
 impl Panel {
+    /// A closed panel whose gestures map through `swipe`.
+    #[must_use]
+    pub fn new(swipe: Swipe) -> Self {
+        Self {
+            swipe,
+            ..Self::default()
+        }
+    }
+
     /// The panel's target state: true once an open has been decided, even if
     /// the UI is still animating.
     #[must_use]
@@ -100,10 +131,10 @@ impl Panel {
             }
             GestureEvent::Update { progress } => self
                 .dragging
-                .map(|kind| PanelCommand::Track(openness(kind, progress))),
+                .map(|kind| PanelCommand::Track(self.swipe.openness(kind, progress))),
             GestureEvent::End { progress, velocity } => {
                 let kind = self.dragging.take()?;
-                if completes(progress, velocity) {
+                if self.swipe.completes(progress, velocity) {
                     self.open = kind == GestureKind::Open;
                 }
                 Some(PanelCommand::AnimateTo(rest(self.open)))
@@ -126,23 +157,44 @@ mod tests {
 
     #[test]
     fn openness_clamps_and_inverts_for_close() {
-        assert!(close(openness(GestureKind::Open, 0.0), 0.0));
-        assert!(close(openness(GestureKind::Open, 0.15), 0.5));
-        assert!(close(openness(GestureKind::Open, 0.45), 1.0));
-        assert!(close(openness(GestureKind::Open, -0.1), 0.0));
-        assert!(close(openness(GestureKind::Close, 0.0), 1.0));
-        assert!(close(openness(GestureKind::Close, 0.06), 0.8));
-        assert!(close(openness(GestureKind::Close, 0.5), 0.0));
+        let s = Swipe::default();
+        assert!(close(s.openness(GestureKind::Open, 0.0), 0.0));
+        assert!(close(s.openness(GestureKind::Open, 0.15), 0.5));
+        assert!(close(s.openness(GestureKind::Open, 0.45), 1.0));
+        assert!(close(s.openness(GestureKind::Open, -0.1), 0.0));
+        assert!(close(s.openness(GestureKind::Close, 0.0), 1.0));
+        assert!(close(s.openness(GestureKind::Close, 0.06), 0.8));
+        assert!(close(s.openness(GestureKind::Close, 0.5), 0.0));
     }
 
     #[test]
     fn snap_decision() {
-        assert!(completes(0.01, 0.61), "flick completes from anywhere");
-        assert!(!completes(0.29, -0.61), "reverse flick aborts past halfway");
-        assert!(completes(0.16, 0.0));
-        assert!(!completes(0.15, 0.0), "exactly halfway does not complete");
-        assert!(!completes(0.1, 0.6), "0.6 itself is not a flick");
-        assert!(completes(0.2, -0.6));
+        let s = Swipe::default();
+        assert!(s.completes(0.01, 0.61), "flick completes from anywhere");
+        assert!(
+            !s.completes(0.29, -0.61),
+            "reverse flick aborts past halfway"
+        );
+        assert!(s.completes(0.16, 0.0));
+        assert!(!s.completes(0.15, 0.0), "exactly halfway does not complete");
+        assert!(!s.completes(0.1, 0.6), "0.6 itself is not a flick");
+        assert!(s.completes(0.2, -0.6));
+    }
+
+    #[test]
+    fn swipe_distance_and_flick_speed_are_tunable() {
+        let s = Swipe {
+            full_travel: 0.1,
+            flick_velocity: 2.0,
+        };
+        assert!(close(s.openness(GestureKind::Open, 0.05), 0.5));
+        assert!(!s.completes(0.01, 1.0), "1.0 is no longer a flick");
+        let mut p = Panel::new(s);
+        p.on_gesture(GestureEvent::Begin(GestureKind::Open));
+        assert_eq!(
+            p.on_gesture(GestureEvent::Update { progress: 0.1 }),
+            Some(PanelCommand::Track(1.0))
+        );
     }
 
     #[test]

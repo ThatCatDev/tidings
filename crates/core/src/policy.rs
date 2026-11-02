@@ -12,6 +12,9 @@ pub struct ToastPolicy {
     pub low_timeout: Duration,
     /// Expiry for normal-urgency toasts without a client timeout.
     pub normal_timeout: Duration,
+    /// Expiry for critical toasts without a client timeout; `None` keeps
+    /// them until dismissed.
+    pub critical_timeout: Option<Duration>,
     /// Maximum number of toasts on screen at once.
     pub max_visible: usize,
 }
@@ -21,6 +24,7 @@ impl Default for ToastPolicy {
         Self {
             low_timeout: Duration::from_secs(4),
             normal_timeout: Duration::from_secs(6),
+            critical_timeout: None,
             max_visible: 4,
         }
     }
@@ -30,7 +34,7 @@ impl ToastPolicy {
     /// How long a toast stays up; `None` means until dismissed.
     ///
     /// A positive client timeout wins; `Some(0)` means never. Otherwise the
-    /// urgency decides: low and normal use their defaults, critical never expires.
+    /// urgency decides, by default critical never expires.
     #[must_use]
     pub fn timeout(&self, n: &Notification) -> Option<Duration> {
         match n.expire_timeout_ms {
@@ -39,7 +43,7 @@ impl ToastPolicy {
             None => match n.urgency {
                 Urgency::Low => Some(self.low_timeout),
                 Urgency::Normal => Some(self.normal_timeout),
-                Urgency::Critical => None,
+                Urgency::Critical => self.critical_timeout,
             },
         }
     }

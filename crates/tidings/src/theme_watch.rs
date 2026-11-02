@@ -14,20 +14,6 @@ use crate::app::{AppEvent, AppSender};
 /// Default poll interval.
 pub const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
-/// The colours file: `$TIDINGS_COLORS`, else `$XDG_CONFIG_HOME/tidings/colors.json`
-/// (`~/.config` when unset).
-#[must_use]
-pub fn colors_path() -> Option<PathBuf> {
-    let var = |name| std::env::var_os(name).filter(|v: &std::ffi::OsString| !v.is_empty());
-    if let Some(p) = var("TIDINGS_COLORS") {
-        return Some(PathBuf::from(p));
-    }
-    let config = var("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| var("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(config.join("tidings").join("colors.json"))
-}
-
 /// Loads the theme at `path`; a missing or invalid file gives the dark defaults.
 #[must_use]
 pub fn load_theme(path: &Path) -> Theme {

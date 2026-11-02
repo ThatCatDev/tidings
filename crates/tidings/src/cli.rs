@@ -23,6 +23,23 @@ pub enum Command {
         #[command(subcommand)]
         command: CtlCommand,
     },
+    /// Inspect the config file (config.toml).
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ConfigCommand {
+    /// Check a config file for errors (default: the one tidings would load).
+    ///
+    /// Exit codes: 0 valid (or absent, so the defaults apply), 1 invalid.
+    Check { path: Option<std::path::PathBuf> },
+    /// Print a commented config file with every setting at its default.
+    Default,
+    /// Print where tidings looks for its config file.
+    Path,
 }
 
 #[derive(Debug, Default, Args)]

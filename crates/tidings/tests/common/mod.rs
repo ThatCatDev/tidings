@@ -145,7 +145,7 @@ pub fn config(bus: &PrivateBus, dir: &Path) -> DaemonConfig {
     config.bus = Bus::Address(bus.address.clone());
     config.colors_path = Some(dir.join("colors.json"));
     config.theme_poll = Duration::from_millis(20);
-    config.gestures = false;
+    config.settings.gestures.enabled = false;
     config
 }
 

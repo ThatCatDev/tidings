@@ -1,0 +1,41 @@
+# tidings configuration
+#
+# Location: ~/.config/tidings/config.toml (or $TIDINGS_CONFIG).
+# Every setting is optional; the values below are the defaults.
+# Check a file with:   tidings config check
+# Changes apply when tidings restarts.
+#
+# Durations are text with a unit: "250ms", "4s", "1.5s", "2m".
+
+[toasts]
+# How long a toast stays up when the app doesn't say (0.5s to 60m).
+low_timeout = "4s"
+normal_timeout = "6s"
+# Critical toasts stay until dismissed unless given a duration.
+critical_timeout = "never"
+# Toasts on screen at once (1 to 10).
+max_visible = 4
+
+[gestures]
+# Two-finger swipe in from the right edge of the trackpad.
+enabled = true
+# Width of the edge zone a swipe must start in, as a fraction of the
+# trackpad's width (0.02 to 0.5).
+edge_zone = 0.1
+# How far the fingers travel to pull the panel fully out, as a fraction
+# of the trackpad's width (0.05 to 1.0). Smaller is more sensitive.
+swipe_distance = 0.3
+# A release faster than this (trackpad widths per second) finishes or
+# cancels the swipe regardless of distance (0.05 to 10).
+flick_velocity = 0.6
+
+[animation]
+# false makes the panel, toasts and groups change instantly.
+enabled = true
+# Playback speed: 2.0 is twice as fast, 0.5 half as fast (0.25 to 4).
+speed = 1.0
+
+[theme]
+# Colours file written by the Noctalia hook. Default:
+# ~/.config/tidings/colors.json ($TIDINGS_COLORS still wins).
+# colors = "~/.config/tidings/colors.json"

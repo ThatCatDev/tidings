@@ -177,7 +177,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let hold = Duration::from_secs_f32(args.next().and_then(|s| s.parse().ok()).unwrap_or(3.0));
 
     let (tx, rx) = mpsc::channel();
-    let ui = tidings_ui::spawn(tx)?;
+    let ui = tidings_ui::spawn(tx, tidings_core::config::AnimationConfig::default())?;
     std::thread::spawn(move || {
         for ev in rx {
             println!("ui event: {ev:?}");

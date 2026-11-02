@@ -52,6 +52,7 @@ use tidings_core::ui::{PanelCommand, UiEvent, UiUpdate};
 use tidings_core::view::ViewModel;
 
 use crate::UiError;
+use crate::anim::Timing;
 use crate::geom::{Point, f32_to_u32, u32_to_f32};
 use crate::render::Painter;
 use crate::scene::HitTarget;
@@ -170,11 +171,12 @@ impl std::fmt::Debug for App {
 /// state and the update channel sender.
 pub fn setup(
     events: Sender<UiEvent>,
+    timing: Timing,
 ) -> Result<(EventLoop<'static, App>, App, channel::Sender<UiUpdate>), UiError> {
     let conn = Connection::connect_to_env()?;
     let (globals, mut queue) = registry_queue_init::<App>(&conn)?;
     let qh = queue.handle();
-    let mut app = App::new(conn.clone(), &globals, &qh, events)?;
+    let mut app = App::new(conn.clone(), &globals, &qh, events, timing)?;
     // Second roundtrip: receive the shm format list and seat capabilities.
     queue.roundtrip(&mut app)?;
     if app.shm.formats().contains(&wl_shm::Format::Abgr8888) {
@@ -225,6 +227,7 @@ impl App {
         globals: &GlobalList,
         qh: &QueueHandle<Self>,
         events: Sender<UiEvent>,
+        timing: Timing,
     ) -> Result<Self, UiError> {
         let compositor = CompositorState::bind(globals, qh)
             .map_err(|_| UiError::MissingGlobal("wl_compositor"))?;
@@ -253,10 +256,10 @@ impl App {
             palette: Palette::default(),
             view: ViewModel::default(),
             painter: Painter::new(),
-            panel_view: PanelView::default(),
+            panel_view: PanelView::new(timing),
             panel: None,
             catcher: None,
-            toast_stack: ToastStack::default(),
+            toast_stack: ToastStack::new(timing),
             toasts: None,
             pointer: None,
             keyboard: None,

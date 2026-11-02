@@ -64,9 +64,26 @@ hl.layer_rule({ name = "tidings-toast", match = { namespace = "^tidings-toast$" 
                 blur = true, ignore_alpha = 0.4, xray = false })
 ```
 
+### Configuration
+
+Settings live in `~/.config/tidings/config.toml` (override the path with `TIDINGS_CONFIG`). Every setting is optional. See [`config.example.toml`](config.example.toml) for the full list with defaults:
+
+- **Toasts:** timeouts for each urgency and the number shown at once.
+- **Gestures:** on or off, edge zone, swipe distance and flick speed.
+- **Animation:** on or off, and speed.
+- **Theme:** the colours file path.
+
+```sh
+tidings config default > ~/.config/tidings/config.toml   # start from the template
+tidings config check                                      # validate it
+tidings config path                                       # where tidings looks
+```
+
+The file is type-checked. Unknown keys, wrong types, malformed durations (`"4s"`, `"250ms"`) and out-of-range numbers are errors, reported as `file:line:column: key: message`. If the file is invalid, the daemon logs the errors and starts with the defaults. Changes apply when tidings restarts.
+
 ### Theme
 
-The colours come from `~/.config/tidings/colors.json`. Override the path with `TIDINGS_COLORS`. tidings watches the file and applies changes live. With [Noctalia](https://noctalia.dev), have its `colors_changed` hook run `tidings-noctalia-colors`, and tidings follows your wallpaper palette.
+The colours come from `~/.config/tidings/colors.json`. Override the path with `TIDINGS_COLORS` or the config's `theme.colors`. tidings watches the file and applies changes live. With [Noctalia](https://noctalia.dev), have its `colors_changed` hook run `tidings-noctalia-colors`, and tidings follows your wallpaper palette.
 
 ## Control
 
