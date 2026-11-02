@@ -104,9 +104,48 @@ pub enum Node {
     /// Restricts following nodes to `rect` until the matching [`Node::PopClip`].
     PushClip(Rect),
     PopClip,
+    /// Multiplies the opacity of following nodes by the given factor (0..=1)
+    /// until the matching [`Node::PopOpacity`]. Nests multiplicatively.
+    PushOpacity(f32),
+    PopOpacity,
+    /// A sub-scene painted once into a sprite (reused while it is unchanged)
+    /// and composited; see [`Scene::layer`].
+    Layer(Box<Layer>),
+}
+
+/// A cached sprite: `scene` (local coordinates, origin at the sprite's
+/// top-left) composited with its top-left at `rect`'s.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Layer {
+    /// Where the sprite lands, in the enclosing scene's coordinates.
+    pub rect: Rect,
+    pub opacity: f32,
+    pub scene: Scene,
 }
 
 impl Node {
+    /// This node moved by `(dx, dy)`.
+    #[must_use]
+    pub fn translated(&self, dx: f32, dy: f32) -> Self {
+        let mut n = self.clone();
+        match &mut n {
+            Self::RoundRect { rect, .. }
+            | Self::Text { rect, .. }
+            | Self::Image { rect, .. }
+            | Self::Glyph { rect, .. }
+            | Self::Shadow { rect, .. }
+            | Self::PushClip(rect) => *rect = rect.translate(dx, dy),
+            Self::Sheet { rect, cutout, .. } => {
+                *rect = rect.translate(dx, dy);
+                *cutout = cutout.translate(dx, dy);
+            }
+            Self::Circle { center, .. } => *center = Point::new(center.x + dx, center.y + dy),
+            Self::Layer(l) => l.rect = l.rect.translate(dx, dy),
+            Self::PopClip | Self::PushOpacity(_) | Self::PopOpacity => {}
+        }
+        n
+    }
+
     /// Bounds this node may paint into (including anti-aliasing fringe).
     #[must_use]
     pub fn bounds(&self) -> Option<Rect> {
@@ -128,7 +167,10 @@ impl Node {
                 offset_y,
                 ..
             } => rect.translate(0.0, *offset_y).outset(*spread),
-            Self::PushClip(_) | Self::PopClip => return None,
+            Self::Layer(l) => return Some(l.rect),
+            Self::PushClip(_) | Self::PopClip | Self::PushOpacity(_) | Self::PopOpacity => {
+                return None;
+            }
         };
         // Text descenders/ascenders may exceed the line box slightly.
         let pad = if matches!(self, Self::Text { .. }) {
@@ -253,6 +295,94 @@ impl Scene {
         });
     }
 
+    /// Emits whatever `f` pushes at `alpha` opacity. Hit regions are
+    /// unaffected; fully opaque content gets no opacity group and fully
+    /// transparent content paints nothing.
+    pub fn with_opacity(&mut self, alpha: f32, f: impl FnOnce(&mut Self)) {
+        if alpha >= 1.0 {
+            f(self);
+            return;
+        }
+        if alpha <= 0.0 {
+            let painted = self.nodes.len();
+            f(self);
+            self.nodes.truncate(painted);
+            return;
+        }
+        self.push(Node::PushOpacity(alpha));
+        f(self);
+        self.push(Node::PopOpacity);
+    }
+
+    /// Emits what `f` draws as a cached sprite placed at `at`, faded by
+    /// `opacity`.
+    ///
+    /// `f` draws in local coordinates (as if `at` were the origin) and gets
+    /// `hit_clip` translated to match; its hit regions are moved back into
+    /// this scene. Because the local drawing does not depend on `at`, moving
+    /// or fading the sprite reuses its pixels instead of repainting. The
+    /// sprite's edge is kept on `scale`'s physical pixel grid, so a layer
+    /// at a whole-pixel `at` paints exactly where direct drawing would.
+    pub fn layer(
+        &mut self,
+        at: Point,
+        opacity: f32,
+        scale: f32,
+        hit_clip: Rect,
+        f: impl FnOnce(&mut Self, Rect),
+    ) {
+        let mut local = Scene::new(Size::default());
+        f(&mut local, hit_clip.translate(-at.x, -at.y));
+        self.hits.extend(local.hits.drain(..).map(|h| Hit {
+            rect: h.rect.translate(at.x, at.y),
+            ..h
+        }));
+        if opacity <= 0.0 {
+            return;
+        }
+        let Some(extent) = local
+            .nodes
+            .iter()
+            .filter_map(Node::bounds)
+            .reduce(|a, b| a.union(&b))
+        else {
+            return;
+        };
+        let grid = |v: f32| (v * scale).floor() / scale;
+        let (x0, y0) = (grid(extent.x), grid(extent.y));
+        let size = Size::new((extent.right() - x0).ceil(), (extent.bottom() - y0).ceil());
+        let scene = Scene {
+            size,
+            nodes: local.nodes.iter().map(|n| n.translated(-x0, -y0)).collect(),
+            hits: Vec::new(),
+        };
+        self.push(Node::Layer(Box::new(Layer {
+            rect: Rect::new(at.x + x0, at.y + y0, size.w, size.h),
+            opacity: opacity.min(1.0),
+            scene,
+        })));
+    }
+
+    /// Every node with layers expanded in place (in this scene's
+    /// coordinates), so tests can inspect what is drawn.
+    #[cfg(test)]
+    #[must_use]
+    pub fn flat_nodes(&self) -> Vec<Node> {
+        let mut out = Vec::with_capacity(self.nodes.len());
+        for n in &self.nodes {
+            match n {
+                Node::Layer(l) => out.extend(
+                    l.scene
+                        .flat_nodes()
+                        .iter()
+                        .map(|c| c.translated(l.rect.x, l.rect.y)),
+                ),
+                other => out.push(other.clone()),
+            }
+        }
+        out
+    }
+
     /// Topmost hit target under `p`.
     #[must_use]
     pub fn hit_test(&self, p: Point) -> Option<&HitTarget> {
@@ -266,11 +396,12 @@ impl Scene {
     /// Rects that differ between `self` (previous frame) and `next`.
     ///
     /// Nodes present in only one of the two scenes contribute their bounds.
-    /// A size change or a clip-structure change damages everything.
+    /// A size change or a change to the clip/opacity structure (which alters
+    /// how unchanged nodes look) damages everything.
     #[must_use]
     pub fn damage_to(&self, next: &Scene) -> Vec<Rect> {
         let full = Rect::new(0.0, 0.0, next.size.w, next.size.h);
-        if self.size != next.size || clips(&self.nodes) != clips(&next.nodes) {
+        if self.size != next.size || structure(&self.nodes) != structure(&next.nodes) {
             return vec![full];
         }
         let mut out: Vec<Rect> = Vec::new();
@@ -282,20 +413,57 @@ impl Scene {
                 out.push(r);
             }
         };
-        for n in self.nodes.iter().filter(|n| !next.nodes.contains(n)) {
-            n.bounds().into_iter().for_each(&mut add);
+        let gone: Vec<&Node> = self
+            .nodes
+            .iter()
+            .filter(|n| !next.nodes.contains(n))
+            .collect();
+        let new: Vec<&Node> = next
+            .nodes
+            .iter()
+            .filter(|n| !self.nodes.contains(n))
+            .collect();
+        // A layer redrawn in place damages only what changed inside it.
+        let in_place = |a: &Node, b: &Node| match (a, b) {
+            (Node::Layer(a), Node::Layer(b))
+                if a.rect == b.rect && a.opacity.to_bits() == b.opacity.to_bits() =>
+            {
+                Some(
+                    a.scene
+                        .damage_to(&b.scene)
+                        .into_iter()
+                        .map(|r| r.translate(a.rect.x, a.rect.y))
+                        .collect::<Vec<_>>(),
+                )
+            }
+            _ => None,
+        };
+        for a in &gone {
+            match new.iter().find_map(|b| in_place(a, b)) {
+                Some(inner) => inner.into_iter().for_each(&mut add),
+                None => a.bounds().into_iter().for_each(&mut add),
+            }
         }
-        for n in next.nodes.iter().filter(|n| !self.nodes.contains(n)) {
-            n.bounds().into_iter().for_each(&mut add);
+        for b in new
+            .iter()
+            .filter(|b| !gone.iter().any(|a| in_place(a, b).is_some()))
+        {
+            b.bounds().into_iter().for_each(&mut add);
         }
         out.into_iter().filter_map(|r| r.intersect(&full)).collect()
     }
 }
 
-fn clips(nodes: &[Node]) -> Vec<&Node> {
+/// The nodes that change how others paint.
+fn structure(nodes: &[Node]) -> Vec<&Node> {
     nodes
         .iter()
-        .filter(|n| matches!(n, Node::PushClip(_) | Node::PopClip))
+        .filter(|n| {
+            matches!(
+                n,
+                Node::PushClip(_) | Node::PopClip | Node::PushOpacity(_) | Node::PopOpacity
+            )
+        })
         .collect()
 }
 
@@ -368,6 +536,29 @@ mod tests {
         let d = a.damage_to(&b);
         assert_eq!(d.len(), 1);
         assert!(d[0].x >= 48.0 && d[0].right() <= 72.0);
+    }
+
+    #[test]
+    fn opacity_groups_nest_and_fade_damages_everything() {
+        let mut a = Scene::new(Size::new(100.0, 100.0));
+        a.with_opacity(1.0, |s| s.push(rr(0.0)));
+        assert_eq!(a.nodes, vec![rr(0.0)], "opaque content needs no group");
+        let mut gone = Scene::new(Size::new(100.0, 100.0));
+        gone.with_opacity(0.0, |s| {
+            s.push(rr(0.0));
+            s.hit(Rect::new(0.0, 0.0, 5.0, 5.0), 0.0, HitTarget::ClearAll);
+        });
+        assert!(gone.nodes.is_empty(), "invisible content paints nothing");
+        assert_eq!(gone.hits.len(), 1, "but stays clickable");
+        let mut b = Scene::new(Size::new(100.0, 100.0));
+        b.with_opacity(0.5, |s| s.push(rr(0.0)));
+        assert_eq!(
+            b.nodes,
+            vec![Node::PushOpacity(0.5), rr(0.0), Node::PopOpacity]
+        );
+        let mut c = Scene::new(Size::new(100.0, 100.0));
+        c.with_opacity(0.6, |s| s.push(rr(0.0)));
+        assert_eq!(b.damage_to(&c), vec![Rect::new(0.0, 0.0, 100.0, 100.0)]);
     }
 
     #[test]

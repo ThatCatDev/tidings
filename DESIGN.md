@@ -66,6 +66,7 @@ Dependency direction: `tidings -> {core, gesture, ui}`, `gesture -> core`, `ui -
 - Right-edge layer surface, layer Top, namespace `tidings-panel`, width 380 logical, margins: top 52, right/bottom 8. Translucent glass background (alpha from the theme, default 0.62); Hyprland supplies the blur via a layer rule.
 - Header: "Notifications", a Do Not Disturb toggle, "Clear all".
 - Groups by app, newest group first. A multi-card group shows collapsed as a stacked card (up to 2 offset "sheets" peeking below), expands on click, and has a per-group "×" clear.
+- Expanding or collapsing a group morphs over ~320 ms (OutCubic, reversible midway): the cards behind slide out from under the top card and fade in, the header fades in, the sheets fade out, and the groups below glide. Collapsing plays it backwards.
 - Card: icon (centred against the text), app name, relative time, bold summary, body (2 lines when collapsed), action buttons, hover "×".
 - A missing icon becomes a letter tile: the app's first letter, dark on a pastel picked by a stable hash of the app name.
 - Empty state: "No Notifications".

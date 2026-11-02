@@ -433,13 +433,13 @@ impl App {
         let (_, h) = canvas.logical();
         let scale = canvas.scale;
         self.panel_view
-            .refresh(&self.view, &mut self.painter, &self.palette, h, scale);
+            .refresh(&self.view, &mut self.painter, &self.palette, h, scale, now);
         let Some((frame, damage)) = self.panel_view.compose(scale, canvas.physical()) else {
             return Ok(());
         };
         canvas.present(&qh, &frame, &damage)?;
         canvas.set_input(&self.compositor, &[self.panel_view.input_rect(h)]);
-        if self.panel_view.motion.is_animating() {
+        if self.panel_view.is_animating(now) {
             canvas.dirty = true;
         }
         Ok(())

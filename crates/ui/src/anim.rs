@@ -1,9 +1,11 @@
 //! Animation math: easing, a critically damped spring, the panel's
-//! openness state machine and the toast stack's enter/move/leave motion.
+//! openness state machine, the toast stack's enter/move/leave motion and
+//! the panel groups' expand/collapse morph.
 //!
 //! Everything takes explicit `Instant`s so it is deterministic under test;
 //! the Wayland layer feeds frame-callback times in.
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use tidings_core::model::NotificationId;
@@ -342,9 +344,126 @@ impl ToastMotion {
     }
 }
 
+/// How long a panel group takes to fan out from its stack (or fold back).
+/// A reversal partway through takes proportionally less.
+pub const GROUP_MORPH: Duration = Duration::from_millis(320);
+
+/// An eased run of a value from `from` to `to`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Tween {
+    from: f32,
+    to: f32,
+    start: Instant,
+    dur: Duration,
+}
+
+impl Tween {
+    fn at(&self, now: Instant) -> f32 {
+        let t = progress(self.start, now, self.dur);
+        self.from + (self.to - self.from) * ease_out_cubic(t)
+    }
+
+    fn done(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.start) >= self.dur
+    }
+}
+
+/// Expand/collapse motion of the panel's groups.
+///
+/// Fed every group's expanded flag; when one flips, its expansion
+/// (0 = stack, 1 = list) eases towards the new state, starting from
+/// wherever a running morph had got to.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct GroupMotion {
+    /// Last known expanded flag per group key.
+    expanded: HashMap<String, bool>,
+    running: HashMap<String, Tween>,
+}
+
+impl GroupMotion {
+    /// Records the current flags and starts a morph for every group whose
+    /// flag changed. New groups appear in place; vanished ones are forgotten.
+    pub fn sync<'a>(&mut self, groups: impl IntoIterator<Item = (&'a str, bool)>, now: Instant) {
+        let mut seen = HashMap::with_capacity(self.expanded.len());
+        for (key, expanded) in groups {
+            if let Some(&was) = self.expanded.get(key)
+                && was != expanded
+            {
+                let rest = if was { 1.0 } else { 0.0 };
+                let from = self
+                    .running
+                    .get(key)
+                    .filter(|t| !t.done(now))
+                    .map_or(rest, |t| t.at(now));
+                let to = if expanded { 1.0 } else { 0.0 };
+                self.running.insert(
+                    key.to_owned(),
+                    Tween {
+                        from,
+                        to,
+                        start: now,
+                        dur: GROUP_MORPH.mul_f32((to - from).abs()),
+                    },
+                );
+            }
+            seen.insert(key.to_owned(), expanded);
+        }
+        self.running
+            .retain(|key, t| seen.contains_key(key) && !t.done(now));
+        self.expanded = seen;
+    }
+
+    /// The expansion of every group mid-morph, sorted by key. Groups at rest
+    /// are absent.
+    #[must_use]
+    pub fn frame(&self, now: Instant) -> Vec<(String, f32)> {
+        let mut out: Vec<_> = self
+            .running
+            .iter()
+            .filter(|(_, t)| !t.done(now))
+            .map(|(key, t)| (key.clone(), t.at(now)))
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    #[must_use]
+    pub fn is_animating(&self, now: Instant) -> bool {
+        self.running.values().any(|t| !t.done(now))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn group_morph_runs_both_ways_and_reverses_midway() {
+        let t0 = Instant::now();
+        let mut g = GroupMotion::default();
+        g.sync([("chat", false), ("mail", false)], t0);
+        assert!(!g.is_animating(t0), "first sight is not a change");
+
+        g.sync([("chat", true), ("mail", false)], t0);
+        assert!(g.is_animating(t0));
+        let mid = g.frame(t0 + ms(80));
+        assert_eq!(mid.len(), 1);
+        let (key, p) = &mid[0];
+        assert_eq!(key, "chat");
+        assert!(*p > 0.2 && *p < 1.0, "{p}");
+
+        // Collapsing halfway starts from where it got to, and is shorter.
+        g.sync([("chat", false), ("mail", false)], t0 + ms(80));
+        let back = g.frame(t0 + ms(81));
+        assert!((back[0].1 - p).abs() < 0.05);
+        assert!(!g.is_animating(t0 + ms(80) + GROUP_MORPH.mul_f32(*p)));
+        assert_eq!(g.frame(t0 + ms(1000)), Vec::new());
+
+        // A vanished group is dropped.
+        g.sync([("chat", true)], t0 + ms(2000));
+        g.sync(std::iter::empty(), t0 + ms(2001));
+        assert!(!g.is_animating(t0 + ms(2001)));
+    }
 
     fn ms(n: u64) -> Duration {
         Duration::from_millis(n)

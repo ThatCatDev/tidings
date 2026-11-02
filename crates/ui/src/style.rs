@@ -353,6 +353,15 @@ impl Rgba {
             a: 1.0,
         }
     }
+
+    /// The same colour with its alpha multiplied by `k`.
+    #[must_use]
+    pub fn faded(self, k: f32) -> Self {
+        Self {
+            a: self.a * k,
+            ..self
+        }
+    }
 }
 
 /// Resolves [`Role`]s against a [`Theme`].

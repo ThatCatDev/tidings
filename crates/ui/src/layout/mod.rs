@@ -22,6 +22,17 @@ pub struct Interaction {
     pub hovered: Option<HitTarget>,
     /// Vertical scroll offset of the panel list, in logical px.
     pub scroll: f32,
+    /// Groups mid expand/collapse, by key: 0 = stacked, 1 = listed.
+    pub morph: Vec<(String, f32)>,
+}
+
+impl Interaction {
+    fn morph_of(&self, key: &str) -> Option<f32> {
+        self.morph
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|&(_, t)| t.clamp(0.0, 1.0))
+    }
 }
 
 /// Panel layout result.
@@ -45,14 +56,20 @@ pub fn layout_panel(
 ) -> PanelLayout {
     let mut scene = Scene::new(size);
     let sheet = Rect::new(0.0, 0.0, size.w, size.h);
-    scene.push(Node::RoundRect {
-        rect: sheet,
-        radius: m::PANEL_RADIUS,
-        fill: Some(fills::GLASS),
-        stroke: Some(fills::OUTLINE),
+    // The glass is the largest fill; as a sprite it is painted once.
+    scene.layer(Point::new(0.0, 0.0), 1.0, scale, sheet, |s, _| {
+        s.push(Node::RoundRect {
+            rect: sheet,
+            radius: m::PANEL_RADIUS,
+            fill: Some(fills::GLASS),
+            stroke: Some(fills::OUTLINE),
+        });
     });
     scene.hit(sheet, m::PANEL_RADIUS, HitTarget::Background);
-    header(&mut scene, view, size, ui, meas);
+    let full = Rect::new(0.0, 0.0, size.w, size.h);
+    scene.layer(Point::new(0.0, 0.0), 1.0, scale, full, |s, _| {
+        header(s, view, size, ui, meas);
+    });
 
     // The list viewport starts a little above the first card so a hovered
     // card's overhanging "×" is not clipped.
@@ -95,7 +112,7 @@ pub fn layout_panel(
     let groups: Vec<GroupLayout> = view
         .groups
         .iter()
-        .map(|g| GroupLayout::measure(g, col_w, scale, meas))
+        .map(|g| GroupLayout::measure(g, col_w, scale, ui.morph_of(&g.key), meas))
         .collect();
     let gaps = crate::geom::u32_to_f32(u32::try_from(groups.len().saturating_sub(1)).unwrap_or(0));
     let content_h = top_slack + groups.iter().map(|g| g.height).sum::<f32>() + gaps * m::CARD_GAP;
@@ -112,7 +129,17 @@ pub fn layout_panel(
             .intersect(&viewport)
             .is_some()
         {
-            lay.emit(&mut scene, g, Point::new(m::PANEL_PADDING, y), ui, viewport);
+            let at = Point::new(m::PANEL_PADDING, y);
+            lay.emit(
+                &mut scene,
+                g,
+                at,
+                ui,
+                Viewport {
+                    clip: viewport,
+                    scale,
+                },
+            );
         }
         y += lay.height + m::CARD_GAP;
     }
@@ -195,7 +222,7 @@ fn header(
     });
 }
 
-/// A measured group in one of its three presentations.
+/// A measured group in one of its presentations.
 #[derive(Debug, Clone)]
 enum GroupShape {
     Single(card::CardLayout),
@@ -206,10 +233,102 @@ enum GroupShape {
     },
     /// Header row followed by every card.
     Expanded {
-        title: crate::text::TextFit,
-        less: crate::text::TextFit,
+        header: GroupHeader,
         cards: Vec<card::CardLayout>,
     },
+    /// Between the two: the cards behind slide out from under the top card
+    /// (or back) while the header fades in and the sheets fade out.
+    /// `t` is 0 for the stack and 1 for the list.
+    Morph {
+        header: GroupHeader,
+        cards: Vec<card::CardLayout>,
+        sheets: usize,
+        t: f32,
+    },
+}
+
+/// An expanded group's header row: app name, "Show less" and "×".
+#[derive(Debug, Clone)]
+struct GroupHeader {
+    title: crate::text::TextFit,
+    less: crate::text::TextFit,
+    /// Row width (the column width).
+    width: f32,
+}
+
+impl GroupHeader {
+    /// Room the "Show less" pill and the "×" keep clear of the title.
+    const CONTROLS_W: f32 = 140.0;
+
+    fn measure(app_name: &str, w: f32, meas: &mut dyn TextMeasure) -> Self {
+        Self {
+            title: meas.fit(
+                app_name,
+                TextStyle::GroupTitle,
+                (w - Self::CONTROLS_W).max(1.0),
+                1,
+            ),
+            less: meas.fit("Show less", TextStyle::Button, 120.0, 1),
+            width: w,
+        }
+    }
+
+    /// Emits the row as a sprite at `origin`, faded by `opacity`.
+    fn sprite(
+        &self,
+        scene: &mut Scene,
+        view: Viewport,
+        key: &str,
+        origin: Point,
+        ui: &Interaction,
+        opacity: f32,
+    ) {
+        scene.layer(origin, opacity, view.scale, view.clip, |s, clip| {
+            self.emit(s, key, Point::new(0.0, 0.0), ui, clip);
+        });
+    }
+
+    fn emit(&self, scene: &mut Scene, key: &str, origin: Point, ui: &Interaction, clip: Rect) {
+        let w = self.width;
+        let title_w = w - Self::CONTROLS_W;
+        let row_cy = origin.y + m::GROUP_HEADER_HEIGHT / 2.0 - 3.0;
+        let lh = TextStyle::GroupTitle.line_height();
+        scene.push(Node::Text {
+            rect: Rect::new(origin.x + 6.0, row_cy - lh / 2.0, title_w, lh),
+            text: self.title.text.clone(),
+            style: TextStyle::GroupTitle,
+            fill: Fill::solid(Role::OnSurface),
+            align: Align::Left,
+            wrap_width: title_w,
+        });
+        let close_r = 12.0;
+        let close_c = Point::new(origin.x + w - close_r - 2.0, row_cy);
+        let clear = HitTarget::ClearGroup(key.to_owned());
+        close_button(
+            scene,
+            close_c,
+            close_r,
+            clear.clone(),
+            ui.hovered.as_ref() == Some(&clear),
+            clip,
+        );
+        let pill_h = 24.0;
+        let pw = (self.less.width + 2.0 * m::PILL_PAD_X).ceil();
+        let collapse = HitTarget::CollapseGroup(key.to_owned());
+        pill(
+            scene,
+            Rect::new(
+                close_c.x - close_r - 8.0 - pw,
+                row_cy - pill_h / 2.0,
+                pw,
+                pill_h,
+            ),
+            &self.less,
+            ui.hovered.as_ref() == Some(&collapse),
+            collapse,
+            clip,
+        );
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -218,8 +337,41 @@ struct GroupLayout {
     height: f32,
 }
 
+/// `n` as a float (counts here are tiny).
+fn count(n: usize) -> f32 {
+    crate::geom::u32_to_f32(u32::try_from(n).unwrap_or(u32::MAX))
+}
+
+fn lerp(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
+}
+
+/// Height of a collapsed stack with `top` in front.
+fn stack_height(top: &card::CardLayout, sheets: usize) -> f32 {
+    top.height + m::SHEET_PEEK * count(sheets)
+}
+
+/// Top of each card in an expanded group, from the group's top edge.
+fn list_offsets(cards: &[card::CardLayout]) -> Vec<f32> {
+    cards
+        .iter()
+        .scan(m::GROUP_HEADER_HEIGHT, |y, lay| {
+            let at = *y;
+            *y += lay.height + m::ACTION_GAP;
+            Some(at)
+        })
+        .collect()
+}
+
 impl GroupLayout {
-    fn measure(g: &GroupView, w: f32, scale: f32, meas: &mut dyn TextMeasure) -> Self {
+    /// Measures `g`; `morph` is its expansion while it animates.
+    fn measure(
+        g: &GroupView,
+        w: f32,
+        scale: f32,
+        morph: Option<f32>,
+        meas: &mut dyn TextMeasure,
+    ) -> Self {
         let lines = if g.expanded {
             m::BODY_LINES_EXPANDED
         } else {
@@ -228,8 +380,7 @@ impl GroupLayout {
         match g.cards.as_slice() {
             [] => Self {
                 shape: GroupShape::Expanded {
-                    title: meas.fit(&g.app_name, TextStyle::GroupTitle, w, 1),
-                    less: meas.fit("Show less", TextStyle::Button, w, 1),
+                    header: GroupHeader::measure(&g.app_name, w, meas),
                     cards: Vec::new(),
                 },
                 height: 0.0,
@@ -241,125 +392,177 @@ impl GroupLayout {
                     shape: GroupShape::Single(c),
                 }
             }
-            [top, rest @ ..] if !g.expanded => {
+            [top, rest @ ..] if !g.expanded && morph.is_none() => {
                 let c = measure_card(top, w, lines, scale, meas);
                 let sheets = rest.len().min(m::MAX_SHEETS);
                 Self {
-                    height: c.height
-                        + m::SHEET_PEEK
-                            * crate::geom::u32_to_f32(u32::try_from(sheets).unwrap_or(0)),
+                    height: stack_height(&c, sheets),
                     shape: GroupShape::Stack { top: c, sheets },
                 }
             }
-            cards => {
-                let cards: Vec<_> = cards
+            all => {
+                let cards: Vec<_> = all
                     .iter()
                     .map(|c| measure_card(c, w, lines, scale, meas))
                     .collect();
-                let gaps = crate::geom::u32_to_f32(u32::try_from(cards.len()).unwrap_or(0));
-                let height = m::GROUP_HEADER_HEIGHT
+                let header = GroupHeader::measure(&g.app_name, w, meas);
+                let list_h = m::GROUP_HEADER_HEIGHT
                     + cards.iter().map(|c| c.height).sum::<f32>()
-                    + gaps * m::ACTION_GAP;
-                Self {
-                    shape: GroupShape::Expanded {
-                        title: meas.fit(&g.app_name, TextStyle::GroupTitle, w - 140.0, 1),
-                        less: meas.fit("Show less", TextStyle::Button, 120.0, 1),
-                        cards,
+                    + count(cards.len()) * m::ACTION_GAP;
+                match (morph, cards.first()) {
+                    (Some(t), Some(top)) => {
+                        let sheets = (cards.len() - 1).min(m::MAX_SHEETS);
+                        Self {
+                            height: lerp(stack_height(top, sheets), list_h, t),
+                            shape: GroupShape::Morph {
+                                header,
+                                cards,
+                                sheets,
+                                t,
+                            },
+                        }
+                    }
+                    _ => Self {
+                        shape: GroupShape::Expanded { header, cards },
+                        height: list_h,
                     },
-                    height,
                 }
             }
         }
     }
 
-    fn emit(&self, scene: &mut Scene, g: &GroupView, origin: Point, ui: &Interaction, clip: Rect) {
+    fn emit(
+        &self,
+        scene: &mut Scene,
+        g: &GroupView,
+        origin: Point,
+        ui: &Interaction,
+        view: Viewport,
+    ) {
         let card_hovered =
             |c: &CardView| ui.hovered.as_ref().and_then(HitTarget::card) == Some(c.id);
+        let list_opts = |c: &CardView| CardOpts {
+            body_target: HitTarget::Activate(c.id),
+            close_target: HitTarget::Dismiss(c.id),
+            hovered: card_hovered(c),
+            hovered_target: ui.hovered.clone(),
+        };
+        let expand = HitTarget::ExpandGroup(g.key.clone());
+        let clear = HitTarget::ClearGroup(g.key.clone());
+        let stack_opts = CardOpts {
+            body_target: expand.clone(),
+            close_target: clear.clone(),
+            hovered: ui
+                .hovered
+                .as_ref()
+                .is_some_and(|h| *h == expand || *h == clear),
+            hovered_target: ui.hovered.clone(),
+        };
         match &self.shape {
             GroupShape::Single(lay) => {
                 let Some(c) = g.cards.first() else { return };
-                let opts = CardOpts {
-                    body_target: HitTarget::Activate(c.id),
-                    close_target: HitTarget::Dismiss(c.id),
-                    hovered: card_hovered(c),
-                    hovered_target: ui.hovered.clone(),
-                };
-                emit_card(scene, c, lay, origin, &opts, clip);
+                card_sprite(scene, view, c, lay, origin, &list_opts(c), 1.0);
             }
             GroupShape::Stack { top, sheets } => {
                 let Some(c) = g.cards.first() else { return };
-                let expand = HitTarget::ExpandGroup(g.key.clone());
-                let clear = HitTarget::ClearGroup(g.key.clone());
-                let hovered = ui
-                    .hovered
-                    .as_ref()
-                    .is_some_and(|h| *h == expand || *h == clear);
-
-                emit_sheets(scene, origin, top, *sheets, &expand, clip);
-                let opts = CardOpts {
-                    body_target: expand,
-                    close_target: clear,
-                    hovered,
-                    hovered_target: ui.hovered.clone(),
-                };
-                emit_card(scene, c, top, origin, &opts, clip);
+                sheets_sprite(scene, view, origin, top, *sheets, &expand, 1.0);
+                card_sprite(scene, view, c, top, origin, &stack_opts, 1.0);
             }
-            GroupShape::Expanded { title, less, cards } => {
+            GroupShape::Expanded { header, cards } => {
                 if cards.is_empty() {
                     return;
                 }
-                let w = cards.first().map_or(0.0, |c| c.width);
-                let row_cy = origin.y + m::GROUP_HEADER_HEIGHT / 2.0 - 3.0;
-                let lh = TextStyle::GroupTitle.line_height();
-                scene.push(Node::Text {
-                    rect: Rect::new(origin.x + 6.0, row_cy - lh / 2.0, w - 140.0, lh),
-                    text: title.text.clone(),
-                    style: TextStyle::GroupTitle,
-                    fill: Fill::solid(Role::OnSurface),
-                    align: Align::Left,
-                    wrap_width: w - 140.0,
-                });
-                let close_r = 12.0;
-                let close_c = Point::new(origin.x + w - close_r - 2.0, row_cy);
-                let clear = HitTarget::ClearGroup(g.key.clone());
-                close_button(
-                    scene,
-                    close_c,
-                    close_r,
-                    clear.clone(),
-                    ui.hovered.as_ref() == Some(&clear),
-                    clip,
-                );
-                let pill_h = 24.0;
-                let pw = (less.width + 2.0 * m::PILL_PAD_X).ceil();
-                let collapse = HitTarget::CollapseGroup(g.key.clone());
-                pill(
-                    scene,
-                    Rect::new(
-                        close_c.x - close_r - 8.0 - pw,
-                        row_cy - pill_h / 2.0,
-                        pw,
-                        pill_h,
-                    ),
-                    less,
-                    ui.hovered.as_ref() == Some(&collapse),
-                    collapse,
-                    clip,
-                );
-                let mut y = origin.y + m::GROUP_HEADER_HEIGHT;
-                for (c, lay) in g.cards.iter().zip(cards) {
-                    let opts = CardOpts {
-                        body_target: HitTarget::Activate(c.id),
-                        close_target: HitTarget::Dismiss(c.id),
-                        hovered: card_hovered(c),
-                        hovered_target: ui.hovered.clone(),
-                    };
-                    emit_card(scene, c, lay, Point::new(origin.x, y), &opts, clip);
-                    y += lay.height + m::ACTION_GAP;
+                header.sprite(scene, view, &g.key, origin, ui, 1.0);
+                for ((c, lay), dy) in g.cards.iter().zip(cards).zip(list_offsets(cards)) {
+                    let at = Point::new(origin.x, origin.y + dy);
+                    card_sprite(scene, view, c, lay, at, &list_opts(c), 1.0);
                 }
+            }
+            GroupShape::Morph {
+                header,
+                cards,
+                sheets,
+                t,
+            } => {
+                let (Some(c0), Some(top)) = (g.cards.first(), cards.first()) else {
+                    return;
+                };
+                let t = *t;
+                let top_at = Point::new(origin.x, origin.y + m::GROUP_HEADER_HEIGHT * t);
+                header.sprite(scene, view, &g.key, origin, ui, t);
+                sheets_sprite(scene, view, top_at, top, *sheets, &expand, 1.0 - t);
+                // Deepest first, so the top card ends up in front. Each
+                // starts tucked behind the top card, its bottom edge where
+                // its sheet peeks out.
+                let tucked_bottom = top_at.y + top.height;
+                let offsets = list_offsets(cards);
+                for (i, ((c, lay), dy)) in g
+                    .cards
+                    .iter()
+                    .zip(cards)
+                    .zip(offsets)
+                    .enumerate()
+                    .skip(1)
+                    .rev()
+                {
+                    let peek = m::SHEET_PEEK * count(i.min(m::MAX_SHEETS));
+                    let y = lerp(tucked_bottom + peek - lay.height, origin.y + dy, t);
+                    let hits = scene.hits.len();
+                    let at = Point::new(origin.x, y);
+                    card_sprite(scene, view, c, lay, at, &list_opts(c), t);
+                    if !g.expanded {
+                        // Folding away: nothing to click on.
+                        scene.hits.truncate(hits);
+                    }
+                }
+                let opts = if g.expanded {
+                    list_opts(c0)
+                } else {
+                    stack_opts
+                };
+                card_sprite(scene, view, c0, top, top_at, &opts, 1.0);
             }
         }
     }
+}
+
+/// Where groups are drawn: the list viewport (hit regions are clipped to
+/// it) and the output scale (sprites align to its pixel grid).
+#[derive(Debug, Clone, Copy)]
+struct Viewport {
+    clip: Rect,
+    scale: f32,
+}
+
+/// Emits a stack's peeking sheets as a sprite behind a top card at `at`.
+fn sheets_sprite(
+    scene: &mut Scene,
+    view: Viewport,
+    at: Point,
+    top: &card::CardLayout,
+    sheets: usize,
+    expand: &HitTarget,
+    opacity: f32,
+) {
+    scene.layer(at, opacity, view.scale, view.clip, |s, clip| {
+        emit_sheets(s, Point::new(0.0, 0.0), top, sheets, expand, clip);
+    });
+}
+
+/// Emits a card as a cached sprite (see [`Scene::layer`]) at `at`, so
+/// moving or fading it during a group morph reuses its pixels.
+fn card_sprite(
+    scene: &mut Scene,
+    view: Viewport,
+    card: &CardView,
+    lay: &card::CardLayout,
+    at: Point,
+    opts: &CardOpts,
+    opacity: f32,
+) {
+    scene.layer(at, opacity, view.scale, view.clip, |s, clip| {
+        emit_card(s, card, lay, Point::new(0.0, 0.0), opts, clip);
+    });
 }
 
 /// Paints the "sheets" peeking below a collapsed stack, deepest first.
@@ -475,7 +678,7 @@ pub(crate) mod tests {
         );
         assert!(
             lay.scene
-                .nodes
+                .flat_nodes()
                 .iter()
                 .any(|n| matches!(n, Node::Text { text, .. } if text == "No Notifications"))
         );
@@ -532,6 +735,7 @@ pub(crate) mod tests {
         let ui = Interaction {
             hovered: Some(HitTarget::Activate(NotificationId(1))),
             scroll: 0.0,
+            ..Interaction::default()
         };
         let lay = layout_panel(
             &view(vec![group("a", &[1], false)]),
@@ -566,7 +770,7 @@ pub(crate) mod tests {
         );
         let s = &lay.scene;
         let sheets = s
-            .nodes
+            .flat_nodes()
             .iter()
             .filter(|n| matches!(n, Node::Sheet { .. }))
             .count();
@@ -598,6 +802,69 @@ pub(crate) mod tests {
         );
     }
 
+    /// Top of the "mail" card laid out below a "chat" group in `expanded`
+    /// state, mid-morph at `t` if given; plus the scene.
+    fn below_chat(expanded: bool, t: Option<f32>) -> (f32, Scene) {
+        let ui = Interaction {
+            morph: t.map(|t| vec![("chat".to_owned(), t)]).unwrap_or_default(),
+            ..Interaction::default()
+        };
+        let lay = layout_panel(
+            &view(vec![
+                group("chat", &[3, 2, 1], expanded),
+                group("mail", &[9], false),
+            ]),
+            Size::new(380.0, 2000.0),
+            1.0,
+            &ui,
+            &mut MonoMeasure,
+        );
+        let y = lay
+            .scene
+            .hits
+            .iter()
+            .find(|h| h.target == HitTarget::Activate(NotificationId(9)))
+            .map_or(f32::NAN, |h| h.rect.y);
+        (y, lay.scene)
+    }
+
+    fn has_opacity(s: &Scene) -> bool {
+        s.nodes.iter().any(|n| match n {
+            Node::PushOpacity(_) => true,
+            Node::Layer(l) => l.opacity < 1.0,
+            _ => false,
+        })
+    }
+
+    #[test]
+    fn group_morph_meets_both_rest_layouts() {
+        let (stack_y, stack) = below_chat(false, None);
+        let (list_y, list) = below_chat(true, None);
+        assert!(!has_opacity(&stack) && !has_opacity(&list));
+        assert!(list_y > stack_y + 50.0);
+
+        let (y0, _) = below_chat(true, Some(0.0));
+        let (y1, end) = below_chat(true, Some(1.0));
+        assert!((y0 - stack_y).abs() < 0.01, "{y0} vs {stack_y}");
+        assert!((y1 - list_y).abs() < 0.01, "{y1} vs {list_y}");
+        assert!(!has_opacity(&end), "fully expanded needs no fade");
+
+        // Halfway, the group below sits between, and things are fading.
+        let (mid_y, mid) = below_chat(true, Some(0.5));
+        assert!(mid_y > stack_y && mid_y < list_y);
+        assert!(has_opacity(&mid));
+        assert!(targets(&mid).contains(&HitTarget::Activate(NotificationId(2))));
+        assert!(targets(&mid).contains(&HitTarget::CollapseGroup("chat".into())));
+    }
+
+    #[test]
+    fn folding_group_cards_are_not_clickable() {
+        let (_, s) = below_chat(false, Some(0.5));
+        let t = targets(&s);
+        assert!(!t.contains(&HitTarget::Activate(NotificationId(2))));
+        assert!(t.contains(&HitTarget::ExpandGroup("chat".into())));
+    }
+
     #[test]
     fn two_card_stack_has_one_sheet() {
         let lay = layout_panel(
@@ -609,7 +876,7 @@ pub(crate) mod tests {
         );
         assert_eq!(
             lay.scene
-                .nodes
+                .flat_nodes()
                 .iter()
                 .filter(|n| matches!(n, Node::Sheet { .. }))
                 .count(),
@@ -678,6 +945,7 @@ pub(crate) mod tests {
         let ui = Interaction {
             hovered: None,
             scroll: 1e6,
+            ..Interaction::default()
         };
         let end = layout_panel(&v, Size::new(380.0, 600.0), 1.0, &ui, &mut MonoMeasure);
         assert!((end.scroll - end.max_scroll).abs() < 0.01);

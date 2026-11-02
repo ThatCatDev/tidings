@@ -4,25 +4,28 @@
 //! fractional scales; text and images are rasterised at physical size too.
 
 mod image;
+mod sprite;
 mod text;
 
 pub use self::image::{ImageCache, Shape};
+pub use self::sprite::{SpriteCache, blend};
 pub use self::text::TextEngine;
 
 use tiny_skia::{
     Color, FillRule, FilterQuality, LineCap, LineJoin, Mask, Paint, Path, PathBuilder, Pattern,
-    Pixmap, PixmapPaint, PremultipliedColorU8, SpreadMode, Stroke, Transform,
+    Pixmap, PremultipliedColorU8, SpreadMode, Stroke, Transform,
 };
 
-use crate::geom::{PxRect, Rect, f32_to_u32, physical_len, u32_to_f32};
-use crate::scene::{Align, GlyphKind, Monogram, Node, Scene};
+use crate::geom::{PxRect, Rect, f32_to_i32, f32_to_u32, physical_len, u32_to_f32};
+use crate::scene::{Align, GlyphKind, Layer, Monogram, Node, Scene};
 use crate::style::{Fill, Palette, Rgba, TextStyle, fills, monogram_colors};
 
-/// Owns the font and image caches used for painting.
+/// Owns the font, image and layer-sprite caches used for painting.
 #[derive(Debug, Default)]
 pub struct Painter {
     pub text: TextEngine,
     pub images: ImageCache,
+    pub sprites: SpriteCache,
 }
 
 /// Physical pixel size of `scene` at `scale`.
@@ -40,7 +43,29 @@ impl Painter {
         Self {
             text: TextEngine::new(),
             images: ImageCache::new(),
+            sprites: SpriteCache::default(),
         }
+    }
+
+    /// Composites a layer's cached sprite, painting it first on a miss.
+    fn layer(&mut self, pm: &mut Pixmap, layer: &Layer, ctx: &Ctx<'_>) {
+        let (palette, scale) = (ctx.palette, ctx.scale);
+        // Taken out so a miss can paint with `self`; layers do not nest in
+        // practice, and a nested one would merely go uncached.
+        let mut sprites = std::mem::take(&mut self.sprites);
+        if let Some(sprite) = sprites.get_or_paint(&layer.scene, palette, scale, || {
+            self.paint(&layer.scene, palette, scale)
+        }) {
+            blend(
+                pm,
+                sprite,
+                f32_to_i32((layer.rect.x * scale).round()),
+                f32_to_i32((layer.rect.y * scale).round()),
+                layer.opacity * ctx.opacity,
+                ctx.clip,
+            );
+        }
+        self.sprites = sprites;
     }
 
     /// Paints `scene` into a fresh transparent pixmap.
@@ -55,6 +80,7 @@ impl Painter {
     pub fn paint_into(&mut self, pm: &mut Pixmap, scene: &Scene, palette: &Palette, scale: f32) {
         let mut clips: Vec<PxRect> = Vec::new();
         let mut mask: Option<Mask> = None;
+        let mut opacity: Vec<f32> = Vec::new();
         for node in &scene.nodes {
             match node {
                 Node::PushClip(r) => {
@@ -69,12 +95,20 @@ impl Painter {
                     clips.pop();
                     mask = clips.last().and_then(|c| rect_mask(pm, c));
                 }
+                Node::PushOpacity(a) => {
+                    let outer = opacity.last().copied().unwrap_or(1.0);
+                    opacity.push(outer * a.clamp(0.0, 1.0));
+                }
+                Node::PopOpacity => {
+                    opacity.pop();
+                }
                 other => {
                     let ctx = Ctx {
                         palette,
                         scale,
                         clip: clips.last().copied(),
                         mask: mask.as_ref(),
+                        opacity: opacity.last().copied().unwrap_or(1.0),
                     };
                     self.draw_node(pm, other, &ctx);
                 }
@@ -116,7 +150,7 @@ impl Painter {
                     spread: *spread,
                     offset_y: *offset_y,
                 };
-                shadow.paint(pm, ctx.palette.resolve(*fill), ctx);
+                shadow.paint(pm, ctx.color(*fill), ctx);
             }
             Node::Circle {
                 center,
@@ -142,7 +176,7 @@ impl Painter {
                 *wrap_width,
                 *rect,
                 *align,
-                ctx.palette.resolve(*fill),
+                ctx.color(*fill),
                 ctx.scale,
                 ctx.clip,
             ),
@@ -156,12 +190,13 @@ impl Painter {
                 pm,
                 *rect,
                 *kind,
-                ctx.palette.resolve(*fill),
+                ctx.color(*fill),
                 ctx.scale,
                 ctx.clip.as_ref(),
                 ctx.mask,
             ),
-            Node::PushClip(_) | Node::PopClip => {}
+            Node::Layer(layer) => self.layer(pm, layer, ctx),
+            Node::PushClip(_) | Node::PopClip | Node::PushOpacity(_) | Node::PopOpacity => {}
         }
     }
 
@@ -174,7 +209,7 @@ impl Painter {
         fallback: Monogram,
         ctx: &Ctx<'_>,
     ) {
-        let (scale, palette, mask) = (ctx.scale, ctx.palette, ctx.mask);
+        let (scale, mask) = (ctx.scale, ctx.mask);
         // Snap to whole pixels so the cached raster maps 1:1 (no resampling).
         let x = (rect.x * scale).round();
         let y = (rect.y * scale).round();
@@ -186,20 +221,13 @@ impl Painter {
             if src.shape == Shape::Icon {
                 // An icon is drawn whole, inset: the plate gives it the
                 // round silhouette every avatar shares.
-                fill_round_rect(
-                    pm,
-                    rect,
-                    radius,
-                    palette.resolve(fills::ICON_PLATE),
-                    scale,
-                    mask,
-                );
+                fill_round_rect(pm, rect, radius, ctx.color(fills::ICON_PLATE), scale, mask);
             }
             let shader = Pattern::new(
                 src.pixmap.as_ref(),
                 SpreadMode::Pad,
                 FilterQuality::Nearest,
-                1.0,
+                ctx.opacity,
                 Transform::from_translate(x, y),
             );
             let paint = Paint {
@@ -211,6 +239,7 @@ impl Painter {
             return;
         }
         let (bg, fg) = monogram_colors(fallback.tint);
+        let (bg, fg) = (bg.faded(ctx.opacity), fg.faded(ctx.opacity));
         fill_round_rect(pm, rect, radius, bg, scale, mask);
         let lh = TextStyle::IconLetter.line_height();
         let tr = Rect::new(rect.x, rect.y + (rect.h - lh) / 2.0, rect.w, lh);
@@ -230,11 +259,7 @@ impl Painter {
 
 /// Composites `src` onto `dst` at physical offset `(x, y)` with `opacity`.
 pub fn blit(dst: &mut Pixmap, src: &Pixmap, x: i32, y: i32, opacity: f32) {
-    let paint = PixmapPaint {
-        opacity: opacity.clamp(0.0, 1.0),
-        ..PixmapPaint::default()
-    };
-    dst.draw_pixmap(x, y, src.as_ref(), &paint, Transform::identity(), None);
+    blend(dst, src, x, y, opacity, None);
 }
 
 fn color(c: Rgba) -> Color {
@@ -332,12 +357,21 @@ fn rounded_rect_px(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<Path> {
     pb.finish()
 }
 
-/// Per-node paint context: theme, scale and the active clip.
+/// Per-node paint context: theme, scale, the active clip and opacity.
 struct Ctx<'a> {
     palette: &'a Palette,
     scale: f32,
     clip: Option<PxRect>,
     mask: Option<&'a Mask>,
+    /// Product of the enclosing opacity groups.
+    opacity: f32,
+}
+
+impl Ctx<'_> {
+    /// `fill` resolved against the theme and faded by the group opacity.
+    fn color(&self, fill: Fill) -> Rgba {
+        self.palette.resolve(fill).faded(self.opacity)
+    }
 }
 
 /// A soft shadow approximated by stacked translucent rounded rects, each a
@@ -468,10 +502,10 @@ fn shape(
     mask: Option<&Mask>,
 ) {
     if let Some(f) = fill {
-        fill_round_rect(pm, rect, radius, ctx.palette.resolve(f), ctx.scale, mask);
+        fill_round_rect(pm, rect, radius, ctx.color(f), ctx.scale, mask);
     }
     if let Some(s) = stroke {
-        stroke_round_rect(pm, rect, radius, ctx.palette.resolve(s), ctx.scale, mask);
+        stroke_round_rect(pm, rect, radius, ctx.color(s), ctx.scale, mask);
     }
 }
 
@@ -638,7 +672,7 @@ mod tests {
     use super::*;
     use crate::geom::Size;
     use crate::layout::{Interaction, layout_panel};
-    use crate::style::default_theme;
+    use crate::style::{Role, default_theme};
 
     /// Font scanning is slow; share one painter across tests.
     fn painter() -> std::sync::MutexGuard<'static, Painter> {
@@ -689,6 +723,29 @@ mod tests {
         );
         let pm = p.paint(&lay.scene, &palette, scale);
         (pm.unwrap_or_else(|| panic!("pixmap")), palette)
+    }
+
+    #[test]
+    fn opacity_groups_fade_what_they_wrap() {
+        let mut p = painter();
+        let palette = Palette::new(default_theme());
+        let square = Node::RoundRect {
+            rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+            radius: 0.0,
+            fill: Some(Fill::solid(Role::Surface)),
+            stroke: None,
+        };
+        let alpha_at = |scene: &Scene, p: &mut Painter| {
+            p.paint(scene, &palette, 1.0)
+                .and_then(|pm| pm.pixel(5, 5))
+                .map_or(0, tiny_skia::PremultipliedColorU8::alpha)
+        };
+        let mut s = Scene::new(Size::new(10.0, 10.0));
+        s.push(square.clone());
+        assert_eq!(alpha_at(&s, &mut p), 255);
+        let mut s = Scene::new(Size::new(10.0, 10.0));
+        s.with_opacity(0.5, |s| s.with_opacity(0.5, |s| s.push(square.clone())));
+        assert!((60..=68).contains(&alpha_at(&s, &mut p)), "nested 0.25");
     }
 
     #[test]

@@ -1,10 +1,12 @@
 //! Panel state: openness motion, interaction, cached content and per-frame
 //! composition. Independent of Wayland objects so it can be tested offscreen.
 
+use std::time::Instant;
+
 use tidings_core::view::ViewModel;
 use tiny_skia::Pixmap;
 
-use crate::anim::{PanelMotion, panel_opacity};
+use crate::anim::{GroupMotion, PanelMotion, panel_opacity};
 use crate::geom::{Point, PxRect, Rect, Size, f32_to_i32, i32_to_f32};
 use crate::layout::{Interaction, PanelLayout, layout_panel};
 use crate::render::{Painter, blit};
@@ -26,6 +28,8 @@ struct Composed {
 #[derive(Debug, Default)]
 pub struct PanelView {
     pub motion: PanelMotion,
+    /// Groups fanning out of (or folding into) their stacks.
+    pub groups: GroupMotion,
     pub ui: Interaction,
     layout: Option<PanelLayout>,
     /// The sheet rendered at `content_key`.
@@ -60,7 +64,8 @@ impl PanelView {
         self.content_key = None;
     }
 
-    /// Re-lays out and repaints the sheet if anything it depends on changed.
+    /// Advances group morphs to `now`, then re-lays out and repaints the
+    /// sheet if anything it depends on changed.
     pub fn refresh(
         &mut self,
         view: &ViewModel,
@@ -68,7 +73,17 @@ impl PanelView {
         palette: &Palette,
         surface_h: f32,
         scale: f32,
+        now: Instant,
     ) {
+        self.groups.sync(
+            view.groups.iter().map(|g| (g.key.as_str(), g.expanded)),
+            now,
+        );
+        let morph = self.groups.frame(now);
+        if morph != self.ui.morph {
+            self.ui.morph = morph;
+            self.needs_layout = true;
+        }
         let size = Size::new(m::PANEL_WIDTH, surface_h);
         let key = (scale.to_bits(), size);
         if !self.needs_layout && self.content_key == Some(key) && self.content.is_some() {
@@ -90,6 +105,13 @@ impl PanelView {
         self.damage.extend(damage);
         self.layout = Some(lay);
         self.needs_layout = false;
+    }
+
+    /// Whether another frame is needed: the panel is sliding or a group is
+    /// morphing.
+    #[must_use]
+    pub fn is_animating(&self, now: Instant) -> bool {
+        self.motion.is_animating() || self.groups.is_animating(now)
     }
 
     /// Composes the surface frame (`phys` = surface size in device px).
@@ -184,6 +206,7 @@ mod tests {
             &Palette::default(),
             400.0,
             1.0,
+            Instant::now(),
         );
         let (frame, damage) = p
             .compose(1.0, (388, 400))
@@ -210,12 +233,12 @@ mod tests {
         let mut painter = painter();
         let palette = Palette::default();
         let view = ViewModel::default();
-        p.refresh(&view, &mut painter, &palette, 400.0, 1.0);
+        p.refresh(&view, &mut painter, &palette, 400.0, 1.0, Instant::now());
         p.compose(1.0, (388, 400));
         // Hovering DND only repaints the pill.
         p.ui.hovered = Some(HitTarget::ToggleDnd);
         p.needs_layout = true;
-        p.refresh(&view, &mut painter, &palette, 400.0, 1.0);
+        p.refresh(&view, &mut painter, &palette, 400.0, 1.0, Instant::now());
         let (_, damage) = p
             .compose(1.0, (388, 400))
             .unwrap_or_else(|| panic!("frame"));
