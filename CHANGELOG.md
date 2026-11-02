@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## [v0.3.1](https://github.com/ThatCatDev/tidings/compare/d671edc09556d6b05c15d40bfba8c4c356fb0cf4..v0.3.1) - 2026-11-02
+#### Bug Fixes
+- (**ui**) stop group cards overlapping while they fan out - ([d671edc](https://github.com/ThatCatDev/tidings/commit/d671edc09556d6b05c15d40bfba8c4c356fb0cf4)) - James, Claude Opus 5.5
+
+- - -
+
 ## [v0.3.0](https://github.com/ThatCatDev/tidings/compare/4a371e92accda2d5af893129c5e78e91343d3211..v0.3.0) - 2026-11-02
 #### Features
 - (**ui**) animate expanding and collapsing a notification group - ([4a371e9](https://github.com/ThatCatDev/tidings/commit/4a371e92accda2d5af893129c5e78e91343d3211)) - James, Claude Opus 5.5
