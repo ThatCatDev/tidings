@@ -2,78 +2,186 @@
 
 A macOS-style Notification Centre for Hyprland, in Rust.
 
-- **Notification daemon.** It implements `org.freedesktop.Notifications` (spec 1.2: actions, body markup, images, persistence), so it replaces swaync, mako or dunst.
-- **Toasts** in the top-right corner: compact one-line glass pills. Hovering pauses expiry; the expand button grows a toast into the full card (long body, action buttons), and an expanded toast stays until collapsed or dismissed.
-- **Inline replies.** Notifications that offer a reply (Telegram and other apps using KDE's `inline-reply` extension, and Chrome web notifications once `chrome://flags/#enable-experimental-web-platform-features` is on) get a Reply button that opens a text field right in the toast or panel card. Enter sends; Esc discards. Web notifications also show their site after the app name.
-- **Notification Centre panel.** A full-height glass panel on the right edge. Notifications are grouped by app into macOS-style stacks, with Do Not Disturb, Clear all and per-group clear.
-- **Trackpad gesture.** Put two fingers on the right edge of the trackpad and swipe left: the panel **follows your fingers**. Let go past halfway, or flick, and it opens; otherwise it springs back. Two fingers swiping right close it the same way.
-
-One binary. No GTK, no Qt, no runtime scripting.
-
 ![The Notification Centre panel beside a collapsed toast, a hovered one and an expanded one, in the default glass theme](docs/screenshots/overview.png)
+
+- **Notification daemon.** It implements `org.freedesktop.Notifications` (actions, body markup, images, persistence), so it replaces swaync, mako or dunst.
+- **Toasts** in the top-right corner: compact one-line glass pills. Hovering pauses expiry; the expand button grows a toast into the full card (long body, action buttons), and an expanded toast stays until collapsed or dismissed.
+- **Inline replies.** Notifications that offer a reply (Telegram, Chrome web notifications and other apps using KDE's `inline-reply` extension) get a Reply button that opens a text field right in the toast or the panel. Enter sends; Esc discards. Web notifications also show their site after the app name.
+- **Notification Centre panel.** A full-height glass panel on the right edge, with notifications grouped by app into stacks, Do Not Disturb, Clear all and per-group clear.
+- **Trackpad gesture.** Put two fingers on the right edge of the trackpad and swipe left: the panel **follows your fingers**. Let go past halfway, or flick, and it opens; otherwise it springs back. Two fingers swiping right close it.
+- **Themes.** Nine built in, from frosted glass to a terminal look, and every shape, colour and font setting can be changed.
 
 | Toast | Expanded | Replying |
 |---|---|---|
 | ![A collapsed toast](docs/screenshots/toast-collapsed.png) | ![An expanded toast with its action buttons](docs/screenshots/toast-expanded.png) | ![An expanded toast with the reply field open](docs/screenshots/toast-reply-typing.png) |
 
-<sub>Rendered by the UI's own painter (`cargo run -p tidings-ui --example demo --release -- themes DIR`). On screen, Hyprland also blurs what is behind the glass.</sub>
+<sub>Rendered by tidings' own drawing code. On screen, Hyprland also blurs what is behind the glass.</sub>
 
-## Architecture
+One binary. No GTK, no Qt, no runtime scripting.
 
-```
-crates/core      domain model, store, policies, view building   (pure, no I/O)
-crates/gesture   evdev multitouch decoder + gesture recogniser   (pure) + device reader
-crates/ui        Wayland layer-shell UI: sctk + tiny-skia + cosmic-text
-crates/tidings   the binary: D-Bus server (zbus), app actor, IPC socket, CLI
-```
+## Contents
 
-- **A single actor owns all state.** D-Bus calls, gesture events, UI interactions, IPC requests and timers are messages on one channel.
-- **The UI is a passive renderer.** It receives a `ViewModel` snapshot and reports interactions back as events.
-- **I/O sits behind traits.** The clock, input device, UI handle and signal sink are all traits, so everything is testable without hardware, a compositor or the session bus.
-
-See [DESIGN.md](DESIGN.md) for the full spec.
+- [Requirements](#requirements)
+- [Install](#install): from a release, or from source
+- [Set up](#set-up): replace your old daemon, start with Hyprland, blur, the trackpad gesture
+- [Using it](#using-it)
+- [Configuration](#configuration), [themes](#themes) and [colours](#colours)
+- [Updating and uninstalling](#updating-and-uninstalling)
+- [Troubleshooting](#troubleshooting)
+- [Development](#development)
 
 ## Requirements
 
-- Hyprland, or another compositor with `wlr-layer-shell`, `fractional-scale-v1`, `viewporter` and `cursor-shape-v1`.
-- Rust 1.89 or newer to build.
-- **Trackpad access.** The gesture reads the touchpad's evdev node (read-only; it never grabs the device). Grant the logged-in user access to the internal touchpad *only*:
-
-  ```sh
-  echo 'SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_TOUCHPAD}=="1", ENV{ID_INPUT_TOUCHPAD_INTEGRATION}=="internal", TAG+="uaccess"' \
-    | sudo tee /etc/udev/rules.d/70-touchpad-uaccess.rules
-  sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=input --action=change
-  ```
-
-  Without this rule, tidings works normally but the gesture is disabled.
+- **A Wayland compositor** with `wlr-layer-shell`, `fractional-scale-v1`, `viewporter` and `cursor-shape-v1`. tidings is made for Hyprland, and runs on others with those protocols (sway, for one), without the blur.
+- **`libxkbcommon`** and at least one font. Desktop systems have both already.
+- **A D-Bus session bus**, which every desktop session has.
 
 ## Install
 
+### From a release
+
+Each [release](https://github.com/ThatCatDev/tidings/releases) has a prebuilt x86-64 Linux build:
+
 ```sh
-./install.sh   # ~/.local/bin/tidings, the colours hook, a D-Bus activation file
+tar xzf tidings-v*-x86_64-linux.tar.gz
+cd tidings-v*-x86_64-linux
+./install.sh
 ```
 
-Stop any other notification daemon. tidings refuses to start if `org.freedesktop.Notifications` is already owned; it never replaces another daemon.
+### From source
 
-### Hyprland config (Lua)
+You need Rust 1.89 or newer (from [rustup](https://rustup.rs) if your distribution's is older), a C toolchain and the `libxkbcommon` and Wayland development files:
+
+```sh
+# Arch
+sudo pacman -S --needed base-devel libxkbcommon wayland
+# Debian / Ubuntu
+sudo apt install build-essential libxkbcommon-dev libwayland-dev
+# Fedora
+sudo dnf install gcc libxkbcommon-devel wayland-devel
+```
+
+Then:
+
+```sh
+git clone https://github.com/ThatCatDev/tidings.git
+cd tidings
+./install.sh
+```
+
+### What `install.sh` does
+
+It installs for your user only, with no root needed, and is safe to run again:
+
+| file | what it is |
+|---|---|
+| `~/.local/bin/tidings` | the daemon, and `tidings ctl` to control it |
+| `~/.local/bin/tidings-noctalia-colors` | turns a [Noctalia](https://noctalia.dev) palette into tidings' colours (optional) |
+| `~/.local/share/dbus-1/services/dev.thatcat.tidings.service` | lets D-Bus start tidings if a notification arrives before your session has |
+
+Set `PREFIX` to install somewhere other than `~/.local`. Make sure `~/.local/bin` is on your `PATH`.
+
+## Set up
+
+### 1. Stop your old notification daemon
+
+Only one program can be the notification daemon. tidings refuses to start while another one is running; it never takes over. To see which one is running now:
+
+```sh
+busctl --user status org.freedesktop.Notifications | grep -E '^(Comm|CommandLine)='
+```
+
+Remove it from your autostart and stop it: `pkill swaync`, `pkill mako` or `pkill dunst`, for example. Shells with their own notifications, such as Noctalia, need that turned off in their settings (for Noctalia, `[notification] enable_daemon = false`).
+
+### 2. Start tidings with Hyprland
+
+In your Hyprland config (Lua):
 
 ```lua
--- autostart
+-- start with the session
 hl.exec_cmd("tidings")
 
--- open/close the panel from the keyboard
+-- open and close the panel from the keyboard
 hl.bind("SUPER + A", hl.dsp.exec_cmd("tidings ctl toggle"))
+```
 
--- glass: blur behind the panel and the toasts
+With `hyprland.conf` it is `exec-once = tidings` and `bind = SUPER, A, exec, tidings ctl toggle`.
+
+To start it now, without logging out, run `tidings &` (or `setsid -f tidings` so it outlives the terminal).
+
+On sway: `exec tidings` and `bindsym $mod+a exec tidings ctl toggle`.
+
+### 3. Blur behind the glass
+
+Hyprland draws the blur, so it needs a layer rule for each of tidings' surfaces:
+
+```lua
 hl.layer_rule({ name = "tidings-panel", match = { namespace = "^tidings-panel$" },
-                blur = true, ignore_alpha = 0.5, xray = false })
--- toasts are lighter glass (alpha >= 0.46) with a soft shadow (alpha < 0.3):
--- the threshold sits between, so the glass is blurred and the shadow is not
+                blur = true, ignore_alpha = 0.3, xray = false })
 hl.layer_rule({ name = "tidings-toast", match = { namespace = "^tidings-toast$" },
                 blur = true, ignore_alpha = 0.4, xray = false })
 ```
 
-### Configuration
+For `hyprland.conf`, write the same rules in its layer rule syntax (see the [Hyprland wiki](https://wiki.hypr.land/configuring/core/rules/layer-rules/)): blur on, `ignore_alpha` 0.3 for the `tidings-panel` namespace and 0.4 for `tidings-toast`.
+
+`ignore_alpha` matters. Hyprland only blurs pixels more opaque than it, so it must sit below the glass (the `clear` theme's panel is 0.4 opaque) and, for toasts, above their soft shadow (at most 0.28). Otherwise the shadow blurs into a grey halo.
+
+### 4. The trackpad gesture (optional)
+
+The swipe reads the trackpad directly (read-only; it never takes the device from your desktop). Allow your user to read the built-in trackpad, and nothing else, with one udev rule:
+
+```sh
+echo 'SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_TOUCHPAD}=="1", ENV{ID_INPUT_TOUCHPAD_INTEGRATION}=="internal", TAG+="uaccess"' \
+  | sudo tee /etc/udev/rules.d/70-touchpad-uaccess.rules
+sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=input --action=change
+```
+
+Restart tidings afterwards. Without the rule everything else works, just not the swipe. Turn the gesture off entirely with `[gestures] enabled = false` in the config.
+
+### 5. Try it
+
+```sh
+notify-send "Hello" "from tidings"
+notify-send -A open=Open -A later=Later "With buttons" "Expand the toast to see them"   # waits for a click
+tidings ctl toggle
+```
+
+### A button in your bar (optional)
+
+Any bar that can run a command on click can open the panel with `tidings ctl toggle`. For Noctalia, add `"tidings"` to a bar section and:
+
+```toml
+[widget.tidings]
+type = "custom_button"
+glyph = "bell"
+tooltip = "Notification Centre"
+
+[widget.tidings.actions]
+left = "exec tidings ctl toggle"
+right = "exec tidings ctl dnd toggle"
+```
+
+## Using it
+
+- **Toasts** appear top right. Hover to keep one on screen, click to open the app, ⌄ to expand it and see its buttons, × to dismiss.
+- **The panel** holds everything you haven't dismissed: swipe in from the trackpad's right edge, press your key binding, or run `tidings ctl toggle`. Click a stack to expand it. Esc or a click outside closes it.
+- **Replying:** click **Reply** on an expanded toast or in the panel, type, and press Enter. Ctrl+V pastes; Esc throws the draft away.
+  - Chrome only offers replies for web notifications with `chrome://flags/#enable-experimental-web-platform-features` turned on, and only after a restart once tidings is running (it checks what the notification daemon supports when it starts).
+- **Do Not Disturb** (the moon in the panel, or `tidings ctl dnd`) keeps notifications in the panel without showing toasts, except critical ones (a low battery, say).
+
+From the command line:
+
+```
+tidings ctl toggle | open | close     the panel
+tidings ctl clear-all                  dismiss everything
+tidings ctl count                      how many notifications there are
+tidings ctl is-open                    whether the panel is open
+tidings ctl dnd [on|off|toggle]        Do Not Disturb (no argument: show it)
+```
+
+Exit codes: 0 ok, 1 error, 2 tidings is not running.
+
+## Configuration
 
 Settings live in `~/.config/tidings/config.toml` (override the path with `TIDINGS_CONFIG`). Every setting is optional. See [`config.example.toml`](config.example.toml) for the full list with defaults:
 
@@ -83,6 +191,7 @@ Settings live in `~/.config/tidings/config.toml` (override the path with `TIDING
 - **Theme:** which theme, overrides of any of its settings, and the colours file path.
 
 ```sh
+mkdir -p ~/.config/tidings
 tidings config default > ~/.config/tidings/config.toml   # start from the template
 tidings config check                                      # validate it
 tidings config path                                       # where tidings looks
@@ -130,6 +239,7 @@ To make your own, put a file in `~/.config/tidings/themes/` (`tidings theme path
 
 ```sh
 tidings theme list                        # * marks the one in use
+mkdir -p ~/.config/tidings/themes
 tidings theme show glass > ~/.config/tidings/themes/mine.toml
 tidings theme check mine                  # or a path to a .toml file
 ```
@@ -144,17 +254,44 @@ Blur is drawn by Hyprland. With `blur = true` the surfaces use the `tidings-pane
 
 The colours come from `~/.config/tidings/colors.json`. Override the path with `TIDINGS_COLORS` or the config's `theme.colors`. tidings watches the file and applies changes live. With [Noctalia](https://noctalia.dev), have its `colors_changed` hook run `tidings-noctalia-colors`, and tidings follows your wallpaper palette.
 
-## Control
+## Updating and uninstalling
 
-```
-tidings ctl toggle | open | close | clear-all | count | is-open
-tidings ctl dnd [on|off|toggle]
-tidings ctl gesture begin open|close / update P / end P V / cancel   # testing
+To update, install again the same way (a newer release, or `git pull && ./install.sh`), then restart tidings:
+
+```sh
+pkill -x tidings; setsid -f tidings
 ```
 
-Exit codes: 0 ok, 1 error, 2 daemon not running. Logging: `TIDINGS_LOG=debug tidings`.
+To uninstall, run `./install.sh --uninstall`. Your settings in `~/.config/tidings` are left in place; delete that folder too if you want. Then set up your previous notification daemon again.
+
+## Troubleshooting
+
+Run tidings in a terminal with more logging to see what it is doing:
+
+```sh
+pkill -x tidings; TIDINGS_LOG=debug tidings
+```
+
+- **"org.freedesktop.Notifications is already owned by another notification daemon"**: another daemon is running. See [Set up, step 1](#1-stop-your-old-notification-daemon).
+- **No blur**: check the layer rules ([step 3](#3-blur-behind-the-glass)) and that the theme has `blur = true`. Screenshots never show Hyprland's blur, so look at the screen itself.
+- **The swipe does nothing**: the log says whether a trackpad was found. Without the udev rule ([step 4](#4-the-trackpad-gesture-optional)) it can't read one.
+- **Settings don't apply**: run `tidings config check` (and `tidings theme check`), then restart tidings. Settings are read at startup; only the colours file is watched live.
+- **Chrome shows Reply as a plain button**: see the Chrome note under [Using it](#using-it).
 
 ## Development
+
+```
+crates/core      domain model, store, policies, view building   (pure, no I/O)
+crates/gesture   evdev multitouch decoder + gesture recogniser   (pure) + device reader
+crates/ui        Wayland layer-shell UI: sctk + tiny-skia + cosmic-text
+crates/tidings   the binary: D-Bus server (zbus), app actor, IPC socket, CLI
+```
+
+- **A single actor owns all state.** D-Bus calls, gesture events, UI interactions, IPC requests and timers are messages on one channel.
+- **The UI is a passive renderer.** It receives a `ViewModel` snapshot and reports interactions back as events.
+- **I/O sits behind traits.** The clock, input device, UI handle and signal sink are all traits, so everything is testable without hardware, a compositor or the session bus.
+
+See [DESIGN.md](DESIGN.md) for the full spec.
 
 ```sh
 cargo fmt --all -- --check
@@ -170,7 +307,7 @@ cargo run -p tidings-ui --example demo --release -- states DIR  # a toast's stat
 cargo run -p tidings --example web_notify     # test page for Chrome web notifications (replies, buttons) on localhost:8317
 ```
 
-## Releases
+### Releases
 
 Every pull request gets a comment with its test coverage, compared with the branch it targets (the `coverage` workflow; it updates the same comment on each push). The check fails if any source file drops under 80% of lines covered; the aim is 85% or more everywhere.
 
