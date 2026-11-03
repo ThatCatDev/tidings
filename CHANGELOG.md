@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## [v0.7.0](https://github.com/ThatCatDev/tidings/compare/bfe8985be780485cc4734e749cfa60f33a372e97..v0.7.0) - 2026-11-03
+#### Features
+- install from a release, and a README for users (#2) - ([bfe8985](https://github.com/ThatCatDev/tidings/commit/bfe8985be780485cc4734e749cfa60f33a372e97)) - James, Claude Opus 5.5, Claude Opus 5.5, Claude Opus 5.5, Claude Opus 5.5
+
+- - -
+
 ## [v0.6.1](https://github.com/ThatCatDev/tidings/compare/059af966ff36a9e7307e5ed2ed28694429e04bbd..v0.6.1) - 2026-11-03
 #### Bug Fixes
 - (**ui**) release the fixes from the coverage work - ([d9264d1](https://github.com/ThatCatDev/tidings/commit/d9264d108eddcfc7a3e1544d558a1d28a6e7ddc7)) - James, Claude Opus 5.5
