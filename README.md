@@ -147,12 +147,15 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings   # clippy::pedantic
 cargo test --workspace          # unit + integration (private dbus-daemon, never the session bus)
 sh tests/colors.sh              # the Noctalia colours script
+scripts/coverage.sh             # test coverage report (needs cargo-llvm-cov and jq)
 cargo run -p tidings-ui --example demo --release        # UI demo on the live compositor
 cargo run -p tidings-ui --example demo --release -- themes DIR   # render every theme to PNGs
 cargo run -p tidings --example web_notify     # test page for Chrome web notifications (replies, buttons) on localhost:8317
 ```
 
 ## Releases
+
+Every pull request gets a comment with its test coverage, compared with the branch it targets (the `coverage` workflow; it updates the same comment on each push).
 
 Releases are fully automatic (semantic release via [cocogitto](https://docs.cocogitto.io)). Commit messages must follow [Conventional Commits](https://www.conventionalcommits.org), and CI rejects any that don't.
 
