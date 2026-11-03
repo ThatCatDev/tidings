@@ -4,7 +4,7 @@ A macOS-style Notification Centre for Hyprland, in Rust.
 
 - **Notification daemon.** It implements `org.freedesktop.Notifications` (spec 1.2: actions, body markup, images, persistence), so it replaces swaync, mako or dunst.
 - **Toasts** in the top-right corner: compact one-line glass pills. Hovering pauses expiry; the expand button grows a toast into the full card (long body, action buttons), and an expanded toast stays until collapsed or dismissed.
-- **Inline replies.** Notifications that offer a reply (Chrome web notifications, Telegram and other apps using KDE's `inline-reply` extension) get a Reply button that opens a text field right in the toast or panel card. Enter sends; Esc discards. Web notifications also show their site after the app name.
+- **Inline replies.** Notifications that offer a reply (Telegram and other apps using KDE's `inline-reply` extension, and Chrome web notifications once `chrome://flags/#enable-experimental-web-platform-features` is on) get a Reply button that opens a text field right in the toast or panel card. Enter sends; Esc discards. Web notifications also show their site after the app name.
 - **Notification Centre panel.** A full-height glass panel on the right edge. Notifications are grouped by app into macOS-style stacks, with Do Not Disturb, Clear all and per-group clear.
 - **Trackpad gesture.** Put two fingers on the right edge of the trackpad and swipe left: the panel **follows your fingers**. Let go past halfway, or flick, and it opens; otherwise it springs back. Two fingers swiping right close it the same way.
 

@@ -76,7 +76,7 @@
     <pre id="log"></pre>
   </section>
 
-  <p>If the Reply button shows but no text field appears, Chrome has inline replies switched off: enable <code>chrome://flags/#enable-experimental-web-platform-features</code> and relaunch Chrome.</p>
+  <p>Chrome needs two things before replies work: <code>chrome://flags/#enable-experimental-web-platform-features</code> turned on, and a restart after tidings starts (Chrome asks the notification server what it supports only once, at launch). Without them the Reply button arrives as a plain button.</p>
 </main>
 <script>
   const log = document.getElementById("log");
