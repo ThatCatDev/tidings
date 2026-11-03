@@ -50,7 +50,7 @@ tidings draws its panel and toasts as Wayland *layer surfaces* (`wlr-layer-shell
 | GNOME (Ubuntu's default desktop) | not supported | GNOME has no layer-shell and keeps its own notification service |
 | X11 sessions | not supported | Wayland only |
 
-Support for more desktops will come over time. If you try tidings somewhere not marked tested, please open an issue saying how it went.
+Support for more desktops will come over time. If you try tidings somewhere not marked tested, please [say how it went](CONTRIBUTING.md#reporting-a-problem-or-how-it-went-on-your-desktop).
 
 On Ubuntu (22.04 or newer), tidings works with Kubuntu's Plasma, sway or another desktop from the table; the release build and the steps below work as they are.
 
@@ -368,8 +368,8 @@ pkill -x tidings; TIDINGS_LOG=debug tidings
 
 ## Contributing
 
-The design is described in [DESIGN.md](DESIGN.md); building, testing and release notes are in [CLAUDE.md](CLAUDE.md).
+Bug reports, reports from desktops not tested yet, and code are all welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-MIT
+[MIT](LICENSE)
