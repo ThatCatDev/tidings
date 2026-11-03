@@ -1,6 +1,7 @@
 //! Wiring: connects the D-Bus server, IPC socket, theme watcher, gesture
 //! reader and UI to one App actor.
 
+use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc as std_mpsc;
@@ -8,6 +9,7 @@ use std::time::Duration;
 
 use tidings_core::clock::Clock;
 use tidings_core::config::Config;
+use tidings_core::gesture::GestureEvent;
 use tidings_core::look::Look;
 use tidings_core::ui::{UiEvent, UiHandle};
 use tidings_gesture::{GestureReader, ReaderConfig, RecognizerConfig, TrackpadOpener};
@@ -45,6 +47,9 @@ pub struct DaemonConfig {
     pub settings: Config,
     /// The look: the chosen theme with the config's overrides.
     pub look: Look,
+    /// Where the trackpad is looked for (sysfs and `/dev/input`), when
+    /// gestures are enabled.
+    pub trackpad: TrackpadOpener,
 }
 
 impl DaemonConfig {
@@ -58,6 +63,7 @@ impl DaemonConfig {
             theme_poll: POLL_INTERVAL,
             settings: Config::default(),
             look: Look::default(),
+            trackpad: TrackpadOpener::default(),
         }
     }
 }
@@ -155,9 +161,8 @@ impl Daemon {
 
         let gestures = config.settings.gestures;
         let panel_state: Box<dyn PanelStateSink> = if gestures.enabled {
-            let tx = events.clone();
             let reader = GestureReader::spawn(
-                TrackpadOpener::default(),
+                config.trackpad,
                 ReaderConfig {
                     recognizer: RecognizerConfig {
                         edge: gestures.edge_zone,
@@ -165,13 +170,7 @@ impl Daemon {
                     },
                     ..ReaderConfig::default()
                 },
-                move |g| {
-                    if tx.send(AppEvent::Gesture(g)).is_ok() {
-                        std::ops::ControlFlow::Continue(())
-                    } else {
-                        std::ops::ControlFlow::Break(())
-                    }
-                },
+                gesture_sink(events.clone()),
             )
             .map_err(DaemonError::Gesture)?;
             Box::new(reader)
@@ -248,6 +247,18 @@ impl Daemon {
     }
 }
 
+/// Forwards the gesture reader's events into the actor, stopping the reader
+/// once the actor is gone.
+fn gesture_sink(events: AppSender) -> impl FnMut(GestureEvent) -> ControlFlow<()> + Send {
+    move |g| {
+        if events.send(AppEvent::Gesture(g)).is_ok() {
+            ControlFlow::Continue(())
+        } else {
+            ControlFlow::Break(())
+        }
+    }
+}
+
 /// Forwards UI interactions (reported on a plain channel from the UI
 /// thread) into the actor. The thread ends when the UI drops its sender or
 /// the actor is gone.
@@ -262,4 +273,22 @@ fn bridge_ui_events(rx: std_mpsc::Receiver<UiEvent>, events: AppSender) -> std::
             }
         })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use tidings_core::gesture::GestureKind;
+
+    use super::*;
+
+    #[test]
+    fn gestures_reach_the_actor_until_it_is_gone() {
+        let (events, mut rx) = mpsc::unbounded_channel();
+        let mut sink = gesture_sink(events);
+        let begin = GestureEvent::Begin(GestureKind::Open);
+        assert_eq!(sink(begin), ControlFlow::Continue(()));
+        assert!(matches!(rx.try_recv(), Ok(AppEvent::Gesture(g)) if g == begin));
+        drop(rx);
+        assert_eq!(sink(GestureEvent::Cancel), ControlFlow::Break(()));
+    }
 }
