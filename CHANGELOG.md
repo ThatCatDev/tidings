@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## [v0.6.1](https://github.com/ThatCatDev/tidings/compare/059af966ff36a9e7307e5ed2ed28694429e04bbd..v0.6.1) - 2026-11-03
+#### Bug Fixes
+- (**ui**) release the fixes from the coverage work - ([d9264d1](https://github.com/ThatCatDev/tidings/commit/d9264d108eddcfc7a3e1544d558a1d28a6e7ddc7)) - James, Claude Opus 5.5
+#### Continuous Integration
+- test coverage report on pull requests (#1) - ([059af96](https://github.com/ThatCatDev/tidings/commit/059af966ff36a9e7307e5ed2ed28694429e04bbd)) - James, Claude Opus 5.5, Claude Opus 5.5, Claude Opus 5.5, Claude Opus 5.5, Claude Opus 5.5, Claude Opus 5.5, Claude Opus 5.5, Claude Opus 5.5, Claude Opus 5.5, Claude Opus 5.5, Claude Opus 5.5, Claude Opus 5.5
+
+- - -
+
 ## [v0.6.0](https://github.com/ThatCatDev/tidings/compare/274511c25f27c5c6157ee70c0106ee96528c36e8..v0.6.0) - 2026-11-03
 #### Features
 - inline replies and web notification origins - ([274511c](https://github.com/ThatCatDev/tidings/commit/274511c25f27c5c6157ee70c0106ee96528c36e8)) - James, Claude Opus 5.5
