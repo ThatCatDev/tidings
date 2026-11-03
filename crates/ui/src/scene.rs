@@ -633,4 +633,223 @@ mod tests {
         assert_eq!(HitTarget::Dismiss(id).card(), Some(id));
         assert_eq!(HitTarget::ClearAll.card(), None);
     }
+
+    #[test]
+    fn every_clickable_target_maps_to_its_event() {
+        let id = NotificationId(3);
+        let key = || "mail".to_owned();
+        let cases = [
+            (
+                HitTarget::Action { id, key: key() },
+                UiEvent::InvokeAction { id, key: key() },
+            ),
+            (HitTarget::Dismiss(id), UiEvent::Dismiss(id)),
+            (
+                HitTarget::CollapseGroup(key()),
+                UiEvent::ToggleGroup { key: key() },
+            ),
+            (
+                HitTarget::ClearGroup(key()),
+                UiEvent::ClearGroup { key: key() },
+            ),
+            (HitTarget::ClearAll, UiEvent::ClearAll),
+            (HitTarget::ToggleDnd, UiEvent::ToggleDnd),
+        ];
+        for (target, event) in cases {
+            assert_eq!(target.click_event(), Some(event), "{target:?}");
+            assert!(target.is_clickable() && !target.is_text());
+            assert_eq!(target.reply_click(), None);
+        }
+        // Card-level targets hover their card; the rest belong to none.
+        assert_eq!(HitTarget::Action { id, key: key() }.card(), Some(id));
+        assert_eq!(HitTarget::ExpandToast(id).card(), Some(id));
+        assert_eq!(HitTarget::ToggleDnd.card(), None);
+    }
+
+    #[test]
+    fn reply_targets_are_handled_by_the_ui() {
+        let id = NotificationId(4);
+        let start = HitTarget::StartReply(id);
+        let field = HitTarget::ReplyField(id);
+        let send = HitTarget::SendReply(id);
+        for t in [&start, &field, &send] {
+            assert_eq!(t.click_event(), None, "{t:?} emits nothing itself");
+            assert_eq!(t.card(), Some(id), "{t:?} belongs to its card");
+        }
+        assert_eq!(start.reply_click(), Some(ReplyClick::Focus(id)));
+        assert_eq!(field.reply_click(), Some(ReplyClick::Focus(id)));
+        assert_eq!(send.reply_click(), Some(ReplyClick::Send(id)));
+        // The field is for typing: an I-beam, not a hand.
+        assert!(field.is_text() && !field.is_clickable());
+        assert!(start.is_clickable() && send.is_clickable());
+        assert!(!HitTarget::Background.is_clickable());
+        assert_eq!(HitTarget::ExpandGroup(String::new()).card(), None);
+    }
+
+    #[test]
+    fn translated_moves_every_positioned_part() {
+        let fill = Fill::solid(Role::Surface);
+        let sheet = Node::Sheet {
+            rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+            radius: 2.0,
+            fill,
+            stroke: None,
+            cutout: Rect::new(1.0, 1.0, 5.0, 5.0),
+            cutout_radius: 1.0,
+        };
+        let Node::Sheet { rect, cutout, .. } = sheet.translated(3.0, 4.0) else {
+            panic!("still a sheet");
+        };
+        assert_eq!(
+            (rect, cutout),
+            (
+                Rect::new(3.0, 4.0, 10.0, 10.0),
+                Rect::new(4.0, 5.0, 5.0, 5.0)
+            )
+        );
+
+        let circle = Node::Circle {
+            center: Point::new(5.0, 5.0),
+            radius: 2.0,
+            fill,
+            stroke: None,
+        };
+        let moved = circle.translated(-1.0, 2.0);
+        assert!(matches!(moved, Node::Circle { center, .. } if center == Point::new(4.0, 7.0)));
+
+        let layer = Node::Layer(Box::new(Layer {
+            rect: Rect::new(0.0, 0.0, 4.0, 4.0),
+            opacity: 1.0,
+            scene: Scene::new(Size::new(4.0, 4.0)),
+        }));
+        let moved = layer.translated(2.0, 2.0);
+        assert_eq!(moved.bounds(), Some(Rect::new(2.0, 2.0, 4.0, 4.0)));
+
+        let shadow = Node::Shadow {
+            rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+            radius: 2.0,
+            spread: 4.0,
+            offset_y: 1.0,
+            fill,
+        };
+        assert!(matches!(
+            shadow.translated(1.0, 2.0),
+            Node::Shadow { rect, .. } if rect == Rect::new(1.0, 2.0, 10.0, 10.0)
+        ));
+
+        for n in [Node::PopClip, Node::PushOpacity(0.5), Node::PopOpacity] {
+            assert_eq!(n.translated(5.0, 5.0), n);
+        }
+    }
+
+    #[test]
+    fn bounds_cover_what_a_node_paints() {
+        let fill = Fill::solid(Role::Surface);
+        let circle = Node::Circle {
+            center: Point::new(10.0, 10.0),
+            radius: 4.0,
+            fill,
+            stroke: None,
+        };
+        // Plus a pixel of anti-aliasing.
+        assert_eq!(circle.bounds(), Some(Rect::new(5.0, 5.0, 10.0, 10.0)));
+        let shadow = Node::Shadow {
+            rect: Rect::new(10.0, 10.0, 20.0, 10.0),
+            radius: 4.0,
+            spread: 5.0,
+            offset_y: 2.0,
+            fill,
+        };
+        // Shifted down, grown by the spread and the fringe.
+        assert_eq!(shadow.bounds(), Some(Rect::new(4.0, 6.0, 32.0, 22.0)));
+        let text = Node::Text {
+            rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+            text: "x".into(),
+            style: TextStyle::Body,
+            fill,
+            align: Align::Left,
+            wrap_width: 10.0,
+        };
+        assert_eq!(text.bounds(), Some(Rect::new(-3.0, -3.0, 16.0, 16.0)));
+        for n in [
+            Node::PushClip(Rect::new(0.0, 0.0, 1.0, 1.0)),
+            Node::PopClip,
+            Node::PushOpacity(0.5),
+            Node::PopOpacity,
+        ] {
+            assert_eq!(n.bounds(), None, "{n:?} paints nothing itself");
+        }
+    }
+
+    #[test]
+    fn layers_keep_hits_and_skip_invisible_or_empty_content() {
+        let target = HitTarget::ClearAll;
+        let hit = |s: &mut Scene| s.hit(Rect::new(1.0, 1.0, 2.0, 2.0), 0.0, HitTarget::ClearAll);
+        let at = Point::new(10.0, 20.0);
+        let clip = Rect::new(0.0, 0.0, 100.0, 100.0);
+
+        // Faded out: clickable, but nothing painted.
+        let mut s = Scene::new(Size::new(100.0, 100.0));
+        s.layer(at, 0.0, 1.0, clip, |s, _| {
+            s.push(rr(0.0));
+            hit(s);
+        });
+        assert!(s.nodes.is_empty(), "faded out: nothing painted");
+        assert_eq!(s.hit_test(Point::new(12.0, 22.0)), Some(&target));
+
+        // Only structure nodes: nothing to paint either.
+        let mut s = Scene::new(Size::new(100.0, 100.0));
+        s.layer(at, 1.0, 1.0, clip, |s, local_clip| {
+            assert_eq!(local_clip, Rect::new(-10.0, -20.0, 100.0, 100.0));
+            s.push(Node::PushClip(local_clip));
+            s.push(Node::PopClip);
+        });
+        assert!(s.nodes.is_empty(), "no painted content: no layer");
+
+        // Painted content becomes one layer on the pixel grid.
+        let mut s = Scene::new(Size::new(100.0, 100.0));
+        s.layer(at, 2.0, 1.6, clip, |s, _| s.push(rr(0.0)));
+        let [Node::Layer(l)] = s.nodes.as_slice() else {
+            panic!("one layer: {:?}", s.nodes);
+        };
+        assert!((l.opacity - 1.0).abs() < f32::EPSILON, "opacity capped");
+        // The rect's 1 px fringe starts at -1, snapped down to the 1/1.6 grid.
+        assert!((l.rect.x - (10.0 - 1.25)).abs() < 1e-4, "{:?}", l.rect);
+        assert_eq!(s.flat_nodes(), vec![rr(0.0).translated(10.0, 20.0)]);
+    }
+
+    #[test]
+    fn a_layer_changed_in_place_damages_only_its_changed_part() {
+        let frame = |x: f32| {
+            let mut s = Scene::new(Size::new(200.0, 100.0));
+            s.layer(Point::new(50.0, 0.0), 1.0, 1.0, Rect::default(), |s, _| {
+                s.push(rr(0.0));
+                s.push(rr(x));
+                s.push(Node::RoundRect {
+                    rect: Rect::new(0.0, 80.0, 100.0, 10.0),
+                    radius: 0.0,
+                    fill: None,
+                    stroke: None,
+                });
+            });
+            s
+        };
+        let (a, b) = (frame(40.0), frame(60.0));
+        let damage = a.damage_to(&b);
+        // Not the whole layer (x 49..151): just where the moved rect was
+        // (89..101) and is now (109..121), in scene coordinates.
+        assert_eq!(damage.len(), 2, "{damage:?}");
+        assert!(
+            damage.iter().all(|r| r.x >= 88.0 && r.right() <= 122.0),
+            "{damage:?}"
+        );
+
+        // A layer that moves damages its old and new place in full.
+        let mut moved = Scene::new(Size::new(200.0, 100.0));
+        moved.layer(Point::new(0.0, 0.0), 1.0, 1.0, Rect::default(), |s, _| {
+            s.push(rr(0.0));
+        });
+        let damage = a.damage_to(&moved);
+        assert!(damage.iter().any(|r| r.right() >= 150.0), "{damage:?}");
+    }
 }

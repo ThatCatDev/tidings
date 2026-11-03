@@ -755,6 +755,33 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn an_empty_group_draws_nothing() {
+        let with_empty = layout_panel(
+            &view(vec![group("a", &[], true), group("b", &[1], false)]),
+            SIZE,
+            1.0,
+            &Interaction::default(),
+            &Style::default(),
+            &mut MonoMeasure,
+        );
+        let hits = targets(&with_empty.scene);
+        assert!(!hits.iter().any(|t| matches!(
+            t,
+            HitTarget::ClearGroup(k) | HitTarget::ExpandGroup(k) | HitTarget::CollapseGroup(k)
+                if k == "a"
+        )));
+        assert!(hits.contains(&HitTarget::Activate(NotificationId(1))));
+        assert!(
+            !with_empty
+                .scene
+                .flat_nodes()
+                .iter()
+                .any(|n| matches!(n, Node::Text { text, .. } if text == "a")),
+            "no header for it"
+        );
+    }
+
+    #[test]
     fn header_hits_resolve() {
         let lay = layout_panel(
             &view(vec![group("a", &[1], false)]),

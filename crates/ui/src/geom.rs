@@ -236,6 +236,7 @@ mod tests {
         assert_eq!(a.union(&b), Rect::new(0.0, 0.0, 15.0, 15.0));
         assert_eq!(a.intersect(&Rect::new(20.0, 0.0, 1.0, 1.0)), None);
         assert_eq!(Rect::default().union(&a), a);
+        assert_eq!(a.union(&Rect::default()), a);
     }
 
     #[test]
@@ -286,5 +287,7 @@ mod tests {
         let v = snap(10.3, 1.6);
         assert!(((v * 1.6) - (v * 1.6).round()).abs() < 1e-4);
         assert_eq!(physical_len(388.0, 1.6), 621);
+        // No scale yet (surface not configured): left as is.
+        assert!((snap(10.3, 0.0) - 10.3).abs() < f32::EPSILON);
     }
 }

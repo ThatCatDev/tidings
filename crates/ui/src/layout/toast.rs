@@ -511,6 +511,21 @@ mod tests {
     }
 
     #[test]
+    fn a_lone_line_of_text_is_centred_in_the_pill() {
+        let centre_of = |summary: &str, body: &str, style| {
+            let mut c = sample_card(9, "Mail");
+            c.summary = summary.into();
+            c.body = body.into();
+            let t = lay(&toast(c, false), None);
+            let lines = texts(&t.scene, style);
+            assert_eq!(lines.len(), 1, "{summary:?} / {body:?}");
+            (lines[0].0.center().y - t.card.center().y).abs()
+        };
+        assert!(centre_of("", "Only a body", TextStyle::BodyLine) < 0.51);
+        assert!(centre_of("Only a summary", " ", TextStyle::SummaryLine) < 0.51);
+    }
+
+    #[test]
     fn a_toast_without_a_time_label_gives_the_text_its_room() {
         let mut c = sample_card(9, "Mail");
         let with = lay(&toast(c.clone(), false), None);
