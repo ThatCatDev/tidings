@@ -10,6 +10,14 @@ A macOS-style Notification Centre for Hyprland, in Rust.
 
 One binary. No GTK, no Qt, no runtime scripting.
 
+![The Notification Centre panel beside a collapsed toast, a hovered one and an expanded one, in the default glass theme](docs/screenshots/overview.png)
+
+| Toast | Expanded | Replying |
+|---|---|---|
+| ![A collapsed toast](docs/screenshots/toast-collapsed.png) | ![An expanded toast with its action buttons](docs/screenshots/toast-expanded.png) | ![An expanded toast with the reply field open](docs/screenshots/toast-reply-typing.png) |
+
+<sub>Rendered by the UI's own painter (`cargo run -p tidings-ui --example demo --release -- themes DIR`). On screen, Hyprland also blurs what is behind the glass.</sub>
+
 ## Architecture
 
 ```
@@ -98,6 +106,12 @@ A theme sets the look: corner radius, border width, colour and opacity, transpar
 | `mocha` | Catppuccin Mocha: deep base, mauve accents, soft lavender rims. |
 | `terminal` | Gruvbox and a monospace font: square corners, bright yellow borders, no shadow. |
 
+| | | |
+|---|---|---|
+| ![glass](docs/screenshots/themes/glass.png)<br>`glass` | ![frosted](docs/screenshots/themes/frosted.png)<br>`frosted` | ![clear](docs/screenshots/themes/clear.png)<br>`clear` |
+| ![solid](docs/screenshots/themes/solid.png)<br>`solid` | ![flat](docs/screenshots/themes/flat.png)<br>`flat` | ![paper](docs/screenshots/themes/paper.png)<br>`paper` |
+| ![nord](docs/screenshots/themes/nord.png)<br>`nord` | ![mocha](docs/screenshots/themes/mocha.png)<br>`mocha` | ![terminal](docs/screenshots/themes/terminal.png)<br>`terminal` |
+
 Pick one in `config.toml`, and change any of its settings right there:
 
 ```toml
@@ -151,7 +165,8 @@ cargo test --workspace          # unit + integration (private dbus-daemon, never
 sh tests/colors.sh              # the Noctalia colours script
 scripts/coverage.sh             # coverage report + the 80%-per-file gate (needs cargo-llvm-cov, jq)
 cargo run -p tidings-ui --example demo --release        # UI demo on the live compositor
-cargo run -p tidings-ui --example demo --release -- themes DIR   # render every theme to PNGs
+cargo run -p tidings-ui --example demo --release -- themes DIR [SCALE]   # render every theme to PNGs (the README's gallery: SCALE 1)
+cargo run -p tidings-ui --example demo --release -- states DIR  # a toast's states (collapsed, hover, expanded, replying)
 cargo run -p tidings --example web_notify     # test page for Chrome web notifications (replies, buttons) on localhost:8317
 ```
 
