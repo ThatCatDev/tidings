@@ -24,6 +24,7 @@ pub mod style;
 pub mod text;
 mod wayland;
 
+use std::path::PathBuf;
 use std::sync::mpsc;
 
 use smithay_client_toolkit::reexports::calloop::channel;
@@ -44,6 +45,16 @@ impl UiHandle for ChannelHandle {
     }
 }
 
+/// Which compositor the UI connects to.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Display {
+    /// `$WAYLAND_DISPLAY` in `$XDG_RUNTIME_DIR`, as every client does.
+    #[default]
+    FromEnv,
+    /// The compositor listening on this socket (tests use a private one).
+    Socket(PathBuf),
+}
+
 /// Starts the UI thread (own Wayland connection + event loop).
 ///
 /// Returns once the connection and globals are set up, so a missing
@@ -56,22 +67,35 @@ pub fn spawn(
     animation: AnimationConfig,
     look: &Look,
 ) -> Result<Box<dyn UiHandle>, UiError> {
+    spawn_on(&Display::FromEnv, events, animation, look)
+}
+
+/// [`spawn`] on a chosen compositor.
+pub fn spawn_on(
+    display: &Display,
+    events: mpsc::Sender<UiEvent>,
+    animation: AnimationConfig,
+    look: &Look,
+) -> Result<Box<dyn UiHandle>, UiError> {
     let timing = anim::Timing::new(&animation);
     let style = style::Style::new(look);
+    let display = display.clone();
     let (init_tx, init_rx) = mpsc::sync_channel::<Result<channel::Sender<UiUpdate>, UiError>>(1);
     std::thread::Builder::new()
         .name("tidings-ui".into())
-        .spawn(move || match wayland::setup(events, timing, style) {
-            Ok((event_loop, app, tx)) => {
-                if init_tx.send(Ok(tx)).is_ok() {
-                    wayland::run(event_loop, app);
+        .spawn(
+            move || match wayland::setup(&display, events, timing, style) {
+                Ok((event_loop, app, tx)) => {
+                    if init_tx.send(Ok(tx)).is_ok() {
+                        wayland::run(event_loop, app);
+                    }
                 }
-            }
-            Err(e) => {
-                // The receiver only disappears if `spawn` itself is gone.
-                let _ = init_tx.send(Err(e));
-            }
-        })?;
+                Err(e) => {
+                    // The receiver only disappears if `spawn` itself is gone.
+                    let _ = init_tx.send(Err(e));
+                }
+            },
+        )?;
     let tx = init_rx.recv().map_err(|_| UiError::Startup)??;
     Ok(Box::new(ChannelHandle(tx)))
 }

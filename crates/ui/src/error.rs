@@ -9,6 +9,11 @@ use smithay_client_toolkit::reexports::client::{
 pub enum UiError {
     #[error("cannot connect to the Wayland display: {0}")]
     Connect(#[from] ConnectError),
+    #[error("cannot connect to the Wayland socket {path}: {source}")]
+    Socket {
+        path: std::path::PathBuf,
+        source: std::io::Error,
+    },
     #[error("cannot read the Wayland registry: {0}")]
     Registry(#[from] GlobalError),
     #[error("required Wayland global is missing: {0}")]

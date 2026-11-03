@@ -1598,6 +1598,7 @@ dependencies = [
  "log",
  "resvg",
  "smithay-client-toolkit",
+ "tempfile",
  "thiserror 2.0.21",
  "tidings-core",
  "tiny-skia",

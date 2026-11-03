@@ -79,7 +79,9 @@ impl App {
             self.close_reply();
         }
         self.replies.drafts.entry(id).or_default();
-        let focused = self.replies.open.is_some_and(|o| o.focused);
+        // The surface may have the keyboard already (the panel does once
+        // clicked), in which case no focus event is coming.
+        let focused = self.keyboard_on == Some(surface);
         self.replies.open = Some(OpenReply {
             id,
             surface,

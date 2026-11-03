@@ -55,13 +55,13 @@ use tidings_core::model::NotificationId;
 use tidings_core::ui::{PanelCommand, UiEvent, UiUpdate};
 use tidings_core::view::ViewModel;
 
-use crate::UiError;
 use crate::anim::Timing;
 use crate::compose::Mods;
 use crate::geom::{Point, f32_to_u32, u32_to_f32};
 use crate::render::Painter;
 use crate::scene::HitTarget;
 use crate::style::{Palette, Style, metrics as m};
+use crate::{Display, UiError};
 use canvas::{Canvas, SurfaceSpec};
 use panel::PanelView;
 use reply::Replies;
@@ -162,6 +162,8 @@ pub struct App {
     toasts: Option<Canvas>,
     pointer: Option<ThemedPointer>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
+    /// The surface with keyboard focus, if any of ours.
+    keyboard_on: Option<SurfaceId>,
     /// Modifiers held, for the reply field's shortcuts.
     mods: Mods,
     /// The inline reply field and its drafts.
@@ -194,11 +196,23 @@ impl std::fmt::Debug for App {
 /// Connects, binds globals and builds the event loop. Returns the loop, the
 /// state and the update channel sender.
 pub fn setup(
+    display: &Display,
     events: Sender<UiEvent>,
     timing: Timing,
     style: Style,
 ) -> Result<(EventLoop<'static, App>, App, channel::Sender<UiUpdate>), UiError> {
-    let conn = Connection::connect_to_env()?;
+    let conn = match display {
+        Display::FromEnv => Connection::connect_to_env()?,
+        Display::Socket(path) => {
+            let socket = std::os::unix::net::UnixStream::connect(path).map_err(|source| {
+                UiError::Socket {
+                    path: path.clone(),
+                    source,
+                }
+            })?;
+            Connection::from_socket(socket)?
+        }
+    };
     let (globals, mut queue) = registry_queue_init::<App>(&conn)?;
     let qh = queue.handle();
     // The loop comes first: the keyboard (bound during the roundtrip below)
@@ -300,6 +314,7 @@ impl App {
             toasts: None,
             pointer: None,
             keyboard: None,
+            keyboard_on: None,
             mods: Mods::default(),
             replies: Replies::default(),
             data_manager: DataDeviceManagerState::bind(globals, qh).ok(),
@@ -485,8 +500,10 @@ impl App {
         let Some((frame, damage)) = self.panel_view.compose(scale, canvas.physical()) else {
             return Ok(());
         };
-        canvas.present(&qh, &frame, &damage)?;
+        // The input region is double-buffered: set it before the commit in
+        // `present`, or it would only apply with the next frame.
         canvas.set_input(&self.compositor, &[self.panel_view.input_rect(h)]);
+        canvas.present(&qh, &frame, &damage)?;
         if self.panel_view.is_animating(now) {
             canvas.dirty = true;
         }
@@ -554,8 +571,8 @@ impl App {
         let Some(frame) = self.toast_stack.compose(now, scale, canvas.physical()) else {
             return Ok(());
         };
-        canvas.present(&qh, &frame, &[])?;
         canvas.set_input(&self.compositor, &self.toast_stack.input_rects());
+        canvas.present(&qh, &frame, &[])?;
         if animating {
             canvas.dirty = true;
         }
@@ -666,7 +683,9 @@ impl App {
                     self.emit(UiEvent::RequestClose);
                     return;
                 }
-                self.pressed = Some((id, self.target_at(id, p)));
+                let target = self.target_at(id, p);
+                log::trace!("tidings-ui: press on {target:?}");
+                self.pressed = Some((id, target));
             }
             PointerEventKind::Release { button, .. } if button == BTN_LEFT => {
                 let Some((pid, target)) = self.pressed.take() else {
@@ -912,6 +931,7 @@ impl PointerHandler for App {
 impl App {
     /// A key press, or a repeat of a held one.
     fn key(&mut self, event: &KeyEvent) {
+        log::trace!("tidings-ui: key {:?} {:?}", event.keysym, event.utf8);
         if self.reply_key(event) {
             return;
         }
@@ -933,6 +953,8 @@ impl KeyboardHandler for App {
         _: &[Keysym],
     ) {
         if let Some(id) = self.id_of(surface) {
+            log::trace!("tidings-ui: keyboard enters {id:?}");
+            self.keyboard_on = Some(id);
             self.reply_focus(id, true);
         }
     }
@@ -946,6 +968,10 @@ impl KeyboardHandler for App {
         _: u32,
     ) {
         if let Some(id) = self.id_of(surface) {
+            log::trace!("tidings-ui: keyboard leaves {id:?}");
+            if self.keyboard_on == Some(id) {
+                self.keyboard_on = None;
+            }
             self.reply_focus(id, false);
         }
     }
