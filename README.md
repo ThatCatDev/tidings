@@ -146,8 +146,10 @@ Exit codes: 0 ok, 1 error, 2 daemon not running. Logging: `TIDINGS_LOG=debug tid
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings   # clippy::pedantic
 cargo test --workspace          # unit + integration (private dbus-daemon, never the session bus)
+                                # (the UI end-to-end tests need sway, wtype, wl-clipboard and grim;
+                                #  they run a private headless sway and skip without it)
 sh tests/colors.sh              # the Noctalia colours script
-scripts/coverage.sh             # test coverage report (needs cargo-llvm-cov and jq)
+scripts/coverage.sh             # coverage report + the 80%-per-file gate (needs cargo-llvm-cov, jq)
 cargo run -p tidings-ui --example demo --release        # UI demo on the live compositor
 cargo run -p tidings-ui --example demo --release -- themes DIR   # render every theme to PNGs
 cargo run -p tidings --example web_notify     # test page for Chrome web notifications (replies, buttons) on localhost:8317
@@ -155,7 +157,7 @@ cargo run -p tidings --example web_notify     # test page for Chrome web notific
 
 ## Releases
 
-Every pull request gets a comment with its test coverage, compared with the branch it targets (the `coverage` workflow; it updates the same comment on each push).
+Every pull request gets a comment with its test coverage, compared with the branch it targets (the `coverage` workflow; it updates the same comment on each push). The check fails if any source file drops under 80% of lines covered; the aim is 85% or more everywhere.
 
 Releases are fully automatic (semantic release via [cocogitto](https://docs.cocogitto.io)). Commit messages must follow [Conventional Commits](https://www.conventionalcommits.org), and CI rejects any that don't.
 

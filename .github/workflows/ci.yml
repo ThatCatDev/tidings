@@ -6,6 +6,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # The UI's end-to-end tests fail rather than skip without a compositor.
+  TIDINGS_REQUIRE_COMPOSITOR: "1"
 
 jobs:
   commits:
@@ -26,7 +28,9 @@ jobs:
       - name: System libraries
         # libxkbcommon/libwayland for the UI crate; dbus-daemon for the
         # integration tests (they start a private bus, never a session bus).
-        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev dbus dash
+        # sway, wtype, wl-clipboard and grim for the UI's end-to-end tests
+        # (a private headless compositor).
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev dbus dash sway wtype wl-clipboard grim
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy

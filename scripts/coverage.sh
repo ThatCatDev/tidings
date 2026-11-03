@@ -1,9 +1,11 @@
 #!/bin/sh
-# Test coverage for the workspace, as a Markdown report.
+# Test coverage for the workspace, as a Markdown report, and the gate that
+# every file stays covered.
 #
 #   scripts/coverage.sh
 #       Runs the tests under cargo-llvm-cov, saves the raw numbers to
-#       target/coverage/coverage.json and prints the report.
+#       target/coverage/coverage.json, prints the report, then checks
+#       the gate (the exit status says whether it passed).
 #
 #   scripts/coverage.sh report HEAD.json [BASE.json [CHANGED]]
 #       Prints the report for HEAD.json (cargo llvm-cov --json
@@ -11,11 +13,17 @@
 #       it; CHANGED is a file listing paths (one per line) to call out as
 #       the files a pull request touched. CI uses this to comment on PRs.
 #
+#   scripts/coverage.sh check HEAD.json
+#       Fails, naming them, if any file's line coverage is under
+#       $COVERAGE_MIN percent (default 80). The aim is 85% everywhere.
+#
 # Needs cargo-llvm-cov and jq. The report starts with a hidden marker,
 # so CI can find and update its own comment.
 set -eu
 
 MARKER='<!-- tidings-coverage -->'
+MIN=${COVERAGE_MIN:-80}
+AIM=85
 
 run() {
     out=target/coverage
@@ -23,6 +31,22 @@ run() {
     # Test output to stderr, so stdout is just the report.
     cargo llvm-cov --workspace --json --summary-only --output-path "$out/coverage.json" >&2
     report "$out/coverage.json"
+    check "$out/coverage.json"
+}
+
+# Every file at least $MIN% of lines covered, or a list of those that are not.
+check() {
+    below=$(jq -r --argjson min "$MIN" '
+        .data[0].files[]
+        | select(.summary.lines.count > 0 and .summary.lines.percent < $min)
+        | "  \(.summary.lines.percent * 10 | round / 10)%  \(.filename | sub("^.*?/(?<p>crates/)"; "\(.p)"))"
+    ' "$1")
+    if [ -n "$below" ]; then
+        echo "coverage: files under $MIN% of lines:" >&2
+        echo "$below" >&2
+        return 1
+    fi
+    echo "coverage: every file has at least $MIN% of lines covered" >&2
 }
 
 report() {
@@ -35,7 +59,8 @@ report() {
         base_arg="--argjson base []"
     fi
     # shellcheck disable=SC2086 # base_arg is two words on purpose
-    jq -rn --arg marker "$MARKER" --slurpfile head "$head_json" $base_arg \
+    jq -rn --arg marker "$MARKER" --argjson min "$MIN" --argjson aim "$AIM" \
+        --slurpfile head "$head_json" $base_arg \
         --rawfile changed "$changed" "$JQ_REPORT"
 }
 
@@ -77,6 +102,12 @@ files($head) as $h
     + (if $btotal == null then ""
        else " (\(delta(pct($total); pct($btotal))) vs base)" end),
   "",
+  # The least covered file against the aim and the gate.
+  ($h | map(select(.lines.count > 0)) | min_by(pct(.lines))
+   | pct(.lines) as $p
+   | (if $p < $min then "❌" elif $p < $aim then "⚠️" else "✅" end)
+     + " Least covered file: `\(.path)` at \(fmt($p)). Every file must stay at \($min)% or more (aiming for \($aim)%)."),
+  "",
   # The Change column only when there is a base to compare with.
   row(["Crate", "Lines", "Functions", "Change"]),
   row(["---", "---:", "---:", "---:"]),
@@ -114,12 +145,16 @@ files($head) as $h
 
 case "${1:-}" in
     "") run ;;
+    check)
+        shift
+        check "$@"
+        ;;
     report)
         shift
         report "$@"
         ;;
     *)
-        echo "usage: $0 [report HEAD.json [BASE.json [CHANGED]]]" >&2
+        echo "usage: $0 [report HEAD.json [BASE.json [CHANGED]] | check HEAD.json]" >&2
         exit 2
         ;;
 esac
