@@ -1549,7 +1549,7 @@ dependencies = [
 
 [[package]]
 name = "tidings"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1568,7 +1568,7 @@ dependencies = [
 
 [[package]]
 name = "tidings-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1578,7 +1578,7 @@ dependencies = [
 
 [[package]]
 name = "tidings-gesture"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "libc",
  "tempfile",
@@ -1589,7 +1589,7 @@ dependencies = [
 
 [[package]]
 name = "tidings-ui"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "cosmic-text",
  "env_logger",

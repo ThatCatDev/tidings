@@ -2,6 +2,16 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## [v0.6.0](https://github.com/ThatCatDev/tidings/compare/274511c25f27c5c6157ee70c0106ee96528c36e8..v0.6.0) - 2026-11-03
+#### Features
+- inline replies and web notification origins - ([274511c](https://github.com/ThatCatDev/tidings/commit/274511c25f27c5c6157ee70c0106ee96528c36e8)) - James, Claude Opus 5.5
+#### Documentation
+- Chrome needs a flag for inline replies - ([c275f8c](https://github.com/ThatCatDev/tidings/commit/c275f8c267e0268da349c432563569525a947655)) - James, Claude Opus 5.5
+#### Tests
+- Chrome web notification test page - ([e8735c6](https://github.com/ThatCatDev/tidings/commit/e8735c63708bec8fca1fb129b4b1fc1a42b5580e)) - James, Claude Opus 5.5
+
+- - -
+
 ## [v0.5.0](https://github.com/ThatCatDev/tidings/compare/512b938aca3901bdaf8b5f997515e3edecff5c66..v0.5.0) - 2026-11-02
 #### Features
 - themes for the panel and toasts - ([512b938](https://github.com/ThatCatDev/tidings/commit/512b938aca3901bdaf8b5f997515e3edecff5c66)) - James, Claude Opus 5.5
