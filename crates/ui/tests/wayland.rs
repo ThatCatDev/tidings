@@ -194,6 +194,7 @@ fn replying_from_a_toast() {
     s.expect(|e| *e == UiEvent::PanelSettled { open: true });
     s.ui.send(UiUpdate::Panel(PanelCommand::AnimateTo(0.0)));
     s.expect(|e| *e == UiEvent::PanelSettled { open: false });
+    s.settle();
     s.click_toast(&t, &HitTarget::StartReply(ID));
     s.settle();
     s.key("Return");
@@ -270,4 +271,112 @@ fn a_missing_compositor_is_an_error() {
     );
     let err = result.err().map(|e| e.to_string()).unwrap_or_default();
     assert!(err.contains("nothing-here"), "{err}");
+}
+
+#[test]
+fn reply_field_edge_cases() {
+    let Some(sway) = Compositor::start() else {
+        return;
+    };
+    let mut s = Session::start(&sway);
+    let t = toast(true);
+    s.view(toasts(t.clone()));
+
+    // Send does nothing on an empty field; Tab is swallowed.
+    s.click_toast(&t, &HitTarget::StartReply(ID));
+    s.settle();
+    let empty = tidings_ui::compose::ReplyDraft {
+        id: ID,
+        text: String::new(),
+        caret: 0,
+        focused: true,
+    };
+    s.click_toast_with(&t, Some(&empty), &HitTarget::SendReply(ID));
+    s.key("Tab");
+
+    // Collapsing the toast closes the field but keeps the draft.
+    s.keys(&["kept"]);
+    s.view(toasts(toast(false)));
+    s.view(toasts(t.clone()));
+    s.click_toast(&t, &HitTarget::StartReply(ID));
+    s.settle();
+    s.keys(&[" and more"]);
+    s.key("Return");
+    s.expect(is_reply("kept and more"));
+
+    // The notification going away forgets the draft.
+    s.click_toast(&t, &HitTarget::StartReply(ID));
+    s.settle();
+    s.keys(&["gone"]);
+    s.view(ViewModel::default());
+    s.view(toasts(t.clone()));
+    s.click_toast(&t, &HitTarget::StartReply(ID));
+    s.settle();
+    s.keys(&["fresh"]);
+    s.key("Return");
+    s.expect(is_reply("fresh"));
+}
+
+#[test]
+fn replying_to_another_card_moves_the_field() {
+    let Some(sway) = Compositor::start() else {
+        return;
+    };
+    let mut s = Session::start(&sway);
+    let other = NotificationId(8);
+    let mut view = toasts(toast(false));
+    view.toasts.clear();
+    view.groups[0].cards.push(card(other.0, true));
+    view.groups[0].expanded = true;
+    s.view(view.clone());
+    s.ui.send(UiUpdate::Panel(PanelCommand::AnimateTo(1.0)));
+    s.expect(|e| *e == UiEvent::PanelSettled { open: true });
+
+    s.click_panel(&view, &HitTarget::StartReply(ID));
+    s.settle();
+    s.keys(&["first"]);
+    let first = tidings_ui::compose::ReplyDraft {
+        id: ID,
+        text: "first".into(),
+        caret: 5,
+        focused: true,
+    };
+    s.click_panel_with(&view, Some(&first), &HitTarget::StartReply(other));
+    s.settle();
+    s.keys(&["second"]);
+    s.key("Return");
+    s.expect(|e| matches!(e, UiEvent::Reply { id, text } if *id == other && text == "second"));
+}
+
+#[test]
+fn outputs_and_devices_come_and_go() {
+    let Some(sway) = Compositor::start() else {
+        return;
+    };
+    let mut s = Session::start(&sway);
+    s.view(toasts(toast(false)));
+    s.hover_toast(&toast(false), &HitTarget::Activate(ID));
+    s.expect(|e| {
+        *e == UiEvent::ToastHover {
+            id: ID,
+            hovered: true,
+        }
+    });
+
+    // A second monitor, and a new scale (the toasts repaint for it).
+    sway.sway("create_output");
+    sway.sway("output HEADLESS-1 scale 2");
+    s.settle();
+
+    // The panel's monitor going away closes the panel.
+    sway.sway("focus output HEADLESS-1");
+    s.ui.send(UiUpdate::Panel(PanelCommand::AnimateTo(1.0)));
+    s.expect(|e| *e == UiEvent::PanelSettled { open: true });
+    sway.sway("output HEADLESS-1 unplug");
+    s.expect(|e| *e == UiEvent::RequestClose);
+
+    // Keyboard and mouse unplugged.
+    sway.unplug_keyboard();
+    s.pointer.unplug();
+    s.view(ViewModel::default());
 }

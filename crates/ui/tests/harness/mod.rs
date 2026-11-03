@@ -6,6 +6,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::PoisonError;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::time::{Duration, Instant};
 
@@ -46,7 +47,7 @@ static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
 const PATIENCE: Duration = Duration::from_secs(5);
 
 /// The tools the tests need besides sway.
-const TOOLS: [&str; 4] = ["sway", "wtype", "wl-copy", "grim"];
+const TOOLS: [&str; 5] = ["sway", "swaymsg", "wtype", "wl-copy", "grim"];
 
 /// The output's size in logical px.
 fn logical() -> (f64, f64) {
@@ -68,7 +69,7 @@ pub struct Compositor {
     /// A `wtype` sleeping with its virtual keyboard attached, so the seat
     /// always has a keyboard: otherwise each `wtype` would add one, type
     /// before the UI has bound it, and take it away again.
-    keyboard: Option<Child>,
+    keyboard: std::sync::Mutex<Option<Child>>,
     dir: tempfile::TempDir,
     socket: PathBuf,
 }
@@ -124,16 +125,19 @@ impl Compositor {
         let mut sway = Self {
             _turn: turn,
             child,
-            keyboard: None,
+            keyboard: std::sync::Mutex::new(None),
             dir,
             socket,
         };
-        sway.keyboard = Some(
-            sway.tool("wtype")
-                .args(["-s", "3600000"])
-                .spawn()
-                .unwrap_or_else(|e| panic!("wtype: {e}")),
-        );
+        let holder = sway
+            .tool("wtype")
+            .args(["-s", "3600000"])
+            .spawn()
+            .unwrap_or_else(|e| panic!("wtype: {e}"));
+        *sway
+            .keyboard
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner) = Some(holder);
         Some(sway)
     }
 
@@ -151,6 +155,20 @@ impl Compositor {
                 "WAYLAND_DISPLAY",
                 self.socket.file_name().unwrap_or_default(),
             );
+        // swaymsg finds sway by its IPC socket, next to the Wayland one.
+        if let Some(ipc) = fs::read_dir(self.dir.path())
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .find(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("sway-ipc"))
+            })
+        {
+            cmd.env("SWAYSOCK", ipc);
+        }
         cmd
     }
 
@@ -166,6 +184,26 @@ impl Compositor {
             String::from_utf8_lossy(&out.stderr)
         );
         out.stdout
+    }
+
+    /// Runs a sway command (`create_output`, `output HEADLESS-1 scale 2`).
+    pub fn sway(&self, command: &str) {
+        self.run("swaymsg", &[command]);
+        std::thread::sleep(Duration::from_millis(300));
+    }
+
+    /// Stops the virtual keyboard: the seat loses its keyboard.
+    pub fn unplug_keyboard(&self) {
+        let holder = self
+            .keyboard
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(mut k) = holder {
+            let _ = k.kill();
+            let _ = k.wait();
+        }
+        std::thread::sleep(Duration::from_millis(300));
     }
 
     /// Puts `text` on the clipboard.
@@ -193,7 +231,12 @@ impl Compositor {
 
 impl Drop for Compositor {
     fn drop(&mut self) {
-        if let Some(k) = self.keyboard.as_mut() {
+        if let Some(k) = self
+            .keyboard
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_mut()
+        {
             let _ = k.kill();
             let _ = k.wait();
         }
@@ -319,6 +362,15 @@ impl Pointer {
         self.device
             .button(self.time(), BTN_LEFT, ButtonState::Released);
         self.send();
+    }
+
+    /// Removes the virtual pointer: the seat loses its pointer.
+    pub fn unplug(&mut self) {
+        self.device.destroy();
+        self.queue
+            .roundtrip(&mut Quiet)
+            .unwrap_or_else(|e| panic!("{e}"));
+        std::thread::sleep(Duration::from_millis(300));
     }
 
     /// Scrolls by `dy` logical px (positive: down).
@@ -461,7 +513,12 @@ impl<'a> Session<'a> {
     }
 
     /// Where `target` is in the open panel showing `view`, on screen.
-    fn panel_point(&mut self, view: &ViewModel, target: &HitTarget) -> Point {
+    fn panel_point(
+        &mut self,
+        view: &ViewModel,
+        draft: Option<&ReplyDraft>,
+        target: &HitTarget,
+    ) -> Point {
         let (w, h) = logical();
         #[allow(clippy::cast_possible_truncation, reason = "the output is small")]
         let (w, h) = (w as f32, h as f32);
@@ -469,6 +526,7 @@ impl<'a> Session<'a> {
         let bottom = tidings_ui::geom::i32_to_f32(m::PANEL_MARGIN_BOTTOM);
         let ui = Interaction {
             hovered: Some(target.clone()),
+            reply: draft.cloned(),
             ..Interaction::default()
         };
         #[allow(clippy::cast_possible_truncation, reason = "the scale is 1.5")]
@@ -485,8 +543,20 @@ impl<'a> Session<'a> {
     }
 
     pub fn hover_panel(&mut self, view: &ViewModel, target: &HitTarget) {
-        let p = self.panel_point(view, target);
+        let p = self.panel_point(view, None, target);
         self.pointer.move_to(f64::from(p.x), f64::from(p.y));
+    }
+
+    /// Clicks `target` in the panel while `draft` is being typed.
+    pub fn click_panel_with(
+        &mut self,
+        view: &ViewModel,
+        draft: Option<&ReplyDraft>,
+        target: &HitTarget,
+    ) {
+        let p = self.panel_point(view, draft, target);
+        self.pointer.move_to(f64::from(p.x), f64::from(p.y));
+        self.pointer.click();
     }
 
     pub fn click_panel(&mut self, view: &ViewModel, target: &HitTarget) {
