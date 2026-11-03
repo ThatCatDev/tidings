@@ -104,8 +104,13 @@ impl App {
         self.reply_changed();
     }
 
-    /// Closes the field if it is open on `surface` (which is going away).
+    /// `surface` is going away: closes the field if it is open there, and
+    /// forgets that it had the keyboard (its leave event may never arrive
+    /// once the surface is gone).
     pub(super) fn close_reply_on(&mut self, surface: SurfaceId) {
+        if self.keyboard_on == Some(surface) {
+            self.keyboard_on = None;
+        }
         if self.replies.open.is_some_and(|o| o.surface == surface) {
             self.close_reply();
         }

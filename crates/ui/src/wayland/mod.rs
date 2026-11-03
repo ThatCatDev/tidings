@@ -15,17 +15,16 @@ use std::sync::mpsc::Sender;
 use std::time::Instant;
 
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
-use smithay_client_toolkit::data_device_manager::DataDeviceManagerState;
-use smithay_client_toolkit::data_device_manager::data_device::DataDevice;
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
 use smithay_client_toolkit::reexports::calloop::channel::{self, Channel};
 use smithay_client_toolkit::reexports::calloop::{EventLoop, LoopHandle};
 use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
 use smithay_client_toolkit::reexports::client::globals::{GlobalList, registry_queue_init};
 use smithay_client_toolkit::reexports::client::protocol::{
-    wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface,
+    wl_data_device_manager::WlDataDeviceManager, wl_keyboard, wl_output, wl_pointer, wl_seat,
+    wl_shm, wl_surface,
 };
-use smithay_client_toolkit::reexports::client::{Connection, Dispatch, Proxy, QueueHandle};
+use smithay_client_toolkit::reexports::client::{Connection, Dispatch, QueueHandle, delegate_noop};
 use smithay_client_toolkit::reexports::protocols::wp::fractional_scale::v1::client::{
     wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1,
     wp_fractional_scale_v1::{self, WpFractionalScaleV1},
@@ -48,8 +47,8 @@ use smithay_client_toolkit::shell::wlr_layer::{
 };
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use smithay_client_toolkit::{
-    delegate_compositor, delegate_data_device, delegate_keyboard, delegate_layer, delegate_output,
-    delegate_pointer, delegate_registry, delegate_seat, delegate_shm, registry_handlers,
+    delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
+    delegate_registry, delegate_seat, delegate_shm, registry_handlers,
 };
 use tidings_core::model::NotificationId;
 use tidings_core::ui::{PanelCommand, UiEvent, UiUpdate};
@@ -63,6 +62,7 @@ use crate::scene::HitTarget;
 use crate::style::{Palette, Style, metrics as m};
 use crate::{Display, UiError};
 use canvas::{Canvas, SurfaceSpec};
+use clipboard::Clipboard;
 use panel::PanelView;
 use reply::Replies;
 use toasts::ToastStack;
@@ -169,8 +169,8 @@ pub struct App {
     /// The inline reply field and its drafts.
     replies: Replies,
     /// Clipboard access, for pasting into the reply field.
-    data_manager: Option<DataDeviceManagerState>,
-    data_device: Option<DataDevice>,
+    data_manager: Option<WlDataDeviceManager>,
+    clipboard: Option<Clipboard>,
     /// For key repeat timers and clipboard reads.
     loop_handle: LoopHandle<'static, App>,
     /// Surface and position under the pointer.
@@ -181,16 +181,6 @@ pub struct App {
     /// Most recent fractional scale seen; used for new surfaces.
     last_scale: f32,
     exit: bool,
-}
-
-impl std::fmt::Debug for App {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("App")
-            .field("panel_mapped", &self.panel.is_some())
-            .field("toasts_mapped", &self.toasts.is_some())
-            .field("openness", &self.panel_view.motion.openness())
-            .finish_non_exhaustive()
-    }
 }
 
 /// Connects, binds globals and builds the event loop. Returns the loop, the
@@ -317,8 +307,8 @@ impl App {
             keyboard_on: None,
             mods: Mods::default(),
             replies: Replies::default(),
-            data_manager: DataDeviceManagerState::bind(globals, qh).ok(),
-            data_device: None,
+            data_manager: globals.bind(qh, 1..=3, ()).ok(),
+            clipboard: None,
             loop_handle,
             pointer_at: None,
             pressed: None,
@@ -351,10 +341,12 @@ impl App {
                 self.after_motion_command();
             }
             UiUpdate::Panel(PanelCommand::AnimateTo(target)) => {
-                if let Some(open) = self.panel_view.motion.animate_to(target, now) {
+                let settled = self.panel_view.motion.animate_to(target, now);
+                // Map (or draw) first: with animations off an open settles at
+                // once, and the panel must still appear.
+                self.after_motion_command();
+                if let Some(open) = settled {
                     self.panel_settled(open);
-                } else {
-                    self.after_motion_command();
                 }
             }
             UiUpdate::Theme(theme) => {
@@ -532,7 +524,9 @@ impl App {
     fn ensure_toast_surface(&mut self, now: Instant) {
         let visible = !self.toast_stack.is_empty() && self.panel.is_none();
         if !visible {
-            self.toasts = None;
+            if self.toasts.take().is_some() {
+                self.close_reply_on(SurfaceId::Toasts);
+            }
             return;
         }
         if self.toasts.is_none() {
@@ -809,7 +803,10 @@ impl LayerShellHandler for App {
                 self.unmap_panel();
                 self.emit(UiEvent::RequestClose);
             }
-            SurfaceId::Toasts => self.toasts = None,
+            SurfaceId::Toasts => {
+                self.close_reply_on(SurfaceId::Toasts);
+                self.toasts = None;
+            }
         }
     }
 
@@ -881,11 +878,11 @@ impl SeatHandler for App {
                 Ok(k) => self.keyboard = Some(k),
                 Err(e) => log::warn!("tidings-ui: no keyboard: {e}"),
             }
-            if self.data_device.is_none() {
-                self.data_device = self
+            if self.clipboard.is_none() {
+                self.clipboard = self
                     .data_manager
                     .as_ref()
-                    .map(|m| m.get_data_device(qh, &seat));
+                    .map(|m| Clipboard::new(m, &seat, qh));
             }
         }
     }
@@ -1067,41 +1064,10 @@ impl Dispatch<WpFractionalScaleV1, SurfaceId> for App {
     }
 }
 
-impl Dispatch<WpFractionalScaleManagerV1, ()> for App {
-    fn event(
-        _: &mut Self,
-        _: &WpFractionalScaleManagerV1,
-        _: <WpFractionalScaleManagerV1 as Proxy>::Event,
-        (): &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-    }
-}
-
-impl Dispatch<WpViewporter, ()> for App {
-    fn event(
-        _: &mut Self,
-        _: &WpViewporter,
-        _: <WpViewporter as Proxy>::Event,
-        (): &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-    }
-}
-
-impl Dispatch<WpViewport, ()> for App {
-    fn event(
-        _: &mut Self,
-        _: &WpViewport,
-        _: <WpViewport as Proxy>::Event,
-        (): &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-    }
-}
+// These objects send no events.
+delegate_noop!(App: WpFractionalScaleManagerV1);
+delegate_noop!(App: WpViewporter);
+delegate_noop!(App: WpViewport);
 
 delegate_compositor!(App);
 delegate_output!(App);
@@ -1111,4 +1077,3 @@ delegate_keyboard!(App);
 delegate_pointer!(App);
 delegate_layer!(App);
 delegate_registry!(App);
-delegate_data_device!(App);

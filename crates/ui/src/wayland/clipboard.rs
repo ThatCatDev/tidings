@@ -1,21 +1,23 @@
-//! Pasting into the reply field: reads the clipboard (the `wl_data_device`
-//! selection) as text, without blocking the UI loop.
+//! Pasting into the reply field: reads the clipboard (the seat's
+//! `wl_data_device` selection) as text, without blocking the UI loop.
 //!
-//! Only paste is supported; tidings never offers anything to copy or drag,
-//! so the drag-and-drop and data-source callbacks do nothing.
+//! tidings only ever pastes, so this speaks the protocol directly rather
+//! than through sctk's data-device helpers, which would also want handlers
+//! for drag-and-drop and for offering data that tidings never uses.
 
 use std::io::{ErrorKind, Read};
+use std::os::fd::AsFd;
+use std::sync::{Mutex, PoisonError};
 
-use smithay_client_toolkit::data_device_manager::WritePipe;
-use smithay_client_toolkit::data_device_manager::data_device::DataDeviceHandler;
-use smithay_client_toolkit::data_device_manager::data_offer::{DataOfferHandler, DragOffer};
-use smithay_client_toolkit::data_device_manager::data_source::DataSourceHandler;
-use smithay_client_toolkit::reexports::calloop::PostAction;
-use smithay_client_toolkit::reexports::client::protocol::wl_data_device::WlDataDevice;
-use smithay_client_toolkit::reexports::client::protocol::wl_data_device_manager::DndAction;
-use smithay_client_toolkit::reexports::client::protocol::wl_data_source::WlDataSource;
-use smithay_client_toolkit::reexports::client::protocol::wl_surface::WlSurface;
-use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};
+use smithay_client_toolkit::reexports::calloop::generic::Generic;
+use smithay_client_toolkit::reexports::calloop::{Interest, Mode, PostAction};
+use smithay_client_toolkit::reexports::client::protocol::wl_data_device::{self, WlDataDevice};
+use smithay_client_toolkit::reexports::client::protocol::wl_data_device_manager::WlDataDeviceManager;
+use smithay_client_toolkit::reexports::client::protocol::wl_data_offer::{self, WlDataOffer};
+use smithay_client_toolkit::reexports::client::protocol::wl_seat::WlSeat;
+use smithay_client_toolkit::reexports::client::{
+    Connection, Dispatch, Proxy, QueueHandle, delegate_noop, event_created_child,
+};
 
 use super::App;
 use crate::compose::{Edit, MAX_CHARS};
@@ -41,132 +43,143 @@ pub fn text_type(offered: &[String]) -> Option<&'static str> {
         .find(|t| offered.iter().any(|o| o.eq_ignore_ascii_case(t)))
 }
 
+/// The types an offer comes in, as the compositor announces them.
+type OfferTypes = Mutex<Vec<String>>;
+
+/// A seat's clipboard.
+#[derive(Debug)]
+pub struct Clipboard {
+    _device: WlDataDevice,
+    /// What is on the clipboard (the compositor only says while tidings
+    /// has the keyboard, which is exactly when it can paste).
+    selection: Option<WlDataOffer>,
+}
+
+impl Clipboard {
+    /// The clipboard of `seat`.
+    pub fn new(manager: &WlDataDeviceManager, seat: &WlSeat, qh: &QueueHandle<App>) -> Self {
+        Self {
+            _device: manager.get_data_device(seat, qh, ()),
+            selection: None,
+        }
+    }
+}
+
 impl App {
     /// Starts reading the clipboard; the text is inserted at the caret once
     /// it has all arrived.
     pub(super) fn paste(&mut self) {
-        let Some(offer) = self
-            .data_device
-            .as_ref()
-            .and_then(|d| d.data().selection_offer())
-        else {
+        let Some(offer) = self.clipboard.as_ref().and_then(|c| c.selection.as_ref()) else {
             return;
         };
-        let Some(mime) = offer.with_mime_types(text_type) else {
+        let mime = offer
+            .data::<OfferTypes>()
+            .and_then(|t| text_type(&t.lock().unwrap_or_else(PoisonError::into_inner)));
+        let Some(mime) = mime else {
             log::debug!("tidings-ui: the clipboard holds no text");
             return;
         };
-        let pipe = match offer.receive(mime.to_owned()) {
+        let (reader, writer) = match std::io::pipe() {
             Ok(pipe) => pipe,
             Err(e) => {
                 log::warn!("tidings-ui: cannot read the clipboard: {e}");
                 return;
             }
         };
+        offer.receive(mime.to_owned(), writer.as_fd());
+        // Only the app sending the text may keep the write end open, or the
+        // read would never see the end.
+        drop(writer);
+        let source = Generic::new(reader, Interest::READ, Mode::Level);
         let mut bytes = Vec::new();
-        let inserted = self.loop_handle.insert_source(pipe, move |(), file, app| {
-            // One read per wake-up: the pipe is readable, so it cannot block
-            // the UI however slowly the other app writes.
-            let mut chunk = [0u8; 8192];
-            // `&File` reads too, which is all `NoIoDrop` lends out.
-            let mut file: &std::fs::File = file;
-            match file.read(&mut chunk) {
-                Ok(n) if n > 0 && bytes.len() + n < MAX_BYTES => {
-                    bytes.extend_from_slice(&chunk[..n]);
-                    return PostAction::Continue;
+        let inserted = self
+            .loop_handle
+            .insert_source(source, move |_, reader, app| {
+                // One read per wake-up: the pipe is readable, so it cannot block
+                // the UI however slowly the other app writes.
+                let mut chunk = [0u8; 8192];
+                match (&**reader).read(&mut chunk) {
+                    Ok(n) if n > 0 && bytes.len() + n < MAX_BYTES => {
+                        bytes.extend_from_slice(&chunk[..n]);
+                        return Ok(PostAction::Continue);
+                    }
+                    // The end of the text, or enough of it.
+                    Ok(n) => bytes.extend_from_slice(&chunk[..n]),
+                    Err(e) if e.kind() == ErrorKind::Interrupted => {
+                        return Ok(PostAction::Continue);
+                    }
+                    Err(e) => {
+                        log::warn!("tidings-ui: reading the clipboard failed: {e}");
+                        return Ok(PostAction::Remove);
+                    }
                 }
-                // End of the data, or enough of it.
-                Ok(n) => bytes.extend_from_slice(&chunk[..n]),
-                Err(e) if matches!(e.kind(), ErrorKind::Interrupted | ErrorKind::WouldBlock) => {
-                    return PostAction::Continue;
-                }
-                Err(e) => {
-                    log::warn!("tidings-ui: reading the clipboard failed: {e}");
-                    return PostAction::Remove;
-                }
-            }
-            bytes.truncate(MAX_BYTES);
-            let text = String::from_utf8_lossy(&bytes);
-            app.edit_reply(&Edit::Insert(
-                text.trim_end_matches(['\n', '\r']).to_owned(),
-            ));
-            PostAction::Remove
-        });
+                bytes.truncate(MAX_BYTES);
+                let text = String::from_utf8_lossy(&bytes);
+                app.edit_reply(&Edit::Insert(
+                    text.trim_end_matches(['\n', '\r']).to_owned(),
+                ));
+                Ok(PostAction::Remove)
+            });
         if let Err(e) = inserted {
             log::warn!("tidings-ui: cannot watch the clipboard pipe: {e}");
         }
     }
+
+    /// The clipboard changed (or tidings got the keyboard and was told what
+    /// is on it).
+    fn set_selection(&mut self, offer: Option<WlDataOffer>) {
+        let Some(clipboard) = self.clipboard.as_mut() else {
+            return;
+        };
+        if let Some(old) = std::mem::replace(&mut clipboard.selection, offer) {
+            old.destroy();
+        }
+    }
 }
 
-impl DataDeviceHandler for App {
-    fn enter(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
+impl Dispatch<WlDataDevice, ()> for App {
+    fn event(
+        app: &mut Self,
         _: &WlDataDevice,
-        _: f64,
-        _: f64,
-        _: &WlSurface,
+        event: wl_data_device::Event,
+        (): &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
     ) {
+        match event {
+            wl_data_device::Event::Selection { id } => app.set_selection(id),
+            // Something dragged over a notification: nothing takes drops.
+            wl_data_device::Event::Enter {
+                id: Some(offer), ..
+            } => offer.destroy(),
+            _ => {}
+        }
     }
 
-    fn leave(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice) {}
-
-    fn motion(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice, _: f64, _: f64) {}
-
-    fn selection(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice) {}
-
-    fn drop_performed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice) {}
+    event_created_child!(App, WlDataDevice, [
+        wl_data_device::EVT_DATA_OFFER_OPCODE => (WlDataOffer, OfferTypes::default()),
+    ]);
 }
 
-impl DataOfferHandler for App {
-    fn source_actions(
-        &mut self,
+impl Dispatch<WlDataOffer, OfferTypes> for App {
+    fn event(
+        _: &mut Self,
+        _: &WlDataOffer,
+        event: wl_data_offer::Event,
+        types: &OfferTypes,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &mut DragOffer,
-        _: DndAction,
     ) {
-    }
-
-    fn selected_action(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &mut DragOffer,
-        _: DndAction,
-    ) {
+        if let wl_data_offer::Event::Offer { mime_type } = event {
+            types
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(mime_type);
+        }
     }
 }
 
-impl DataSourceHandler for App {
-    fn accept_mime(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &WlDataSource,
-        _: Option<String>,
-    ) {
-    }
-
-    fn send_request(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &WlDataSource,
-        _: String,
-        _: WritePipe,
-    ) {
-    }
-
-    fn cancelled(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataSource) {}
-
-    fn dnd_dropped(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataSource) {}
-
-    fn dnd_finished(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataSource) {}
-
-    fn action(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataSource, _: DndAction) {}
-}
+delegate_noop!(App: WlDataDeviceManager);
 
 #[cfg(test)]
 mod tests {
