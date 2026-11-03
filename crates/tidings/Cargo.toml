@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "macOS-style Notification Centre for Hyprland"
+description = "macOS-style Notification Centre for Wayland: notification daemon, toasts and a panel"
 
 [lints]
 workspace = true

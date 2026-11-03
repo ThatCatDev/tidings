@@ -522,7 +522,7 @@ async fn ui_events_reach_the_actor_and_shutdown_finishes_it() {
     let dir = tempfile::tempdir().unwrap();
     let mut cfg = config(&bus, dir.path());
     // No colours file: the built-in colours, nothing watched.
-    cfg.colors_path = None;
+    cfg.colors = None;
     let socket = cfg.socket_path.clone();
     let (ui_events_tx, ui_events) = std::sync::mpsc::channel();
     let daemon = tidings::daemon::Daemon::start(

@@ -9,7 +9,7 @@
 use crate::theme::{Mode, Rgb, Theme};
 
 /// A colour in a look: a slot of the current colour theme (so it follows
-/// Noctalia's palette), or a fixed colour.
+/// the colours file, `colors.json`), or a fixed colour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Paint {
     Surface,

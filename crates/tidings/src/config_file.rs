@@ -1,5 +1,5 @@
-//! Finding and reading the user's files: `config.toml` and where
-//! `colors.json` lives.
+//! Finding and reading the user's files: `config.toml` and where the
+//! colours come from.
 //!
 //! Parsing and validation are in [`tidings_core::config`]; this module adds
 //! the file system and environment.
@@ -8,6 +8,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use tidings_core::config::{Config, ConfigErrors};
+
+use crate::colors::ColorSource;
 
 /// A non-empty environment variable.
 fn var(name: &str) -> Option<OsString> {
@@ -31,17 +33,29 @@ pub fn config_path() -> Option<PathBuf> {
         .or_else(|| Some(config_dir()?.join("config.toml")))
 }
 
-/// The colours file: `$TIDINGS_COLORS`, else the config's `theme.colors`,
-/// else `colors.json` in [`config_dir`].
+/// Where the colours come from (see [`ColorSource::pick`]): `$TIDINGS_COLORS`
+/// or the config's `theme.colors` (a file, or `"noctalia"`) if set, else
+/// `colors.json` in [`config_dir`] when it exists, else Noctalia's palette
+/// (`hypr/noctalia.lua` in the config home) when that exists.
 #[must_use]
-pub fn colors_path(config: &Config) -> Option<PathBuf> {
-    if let Some(p) = var("TIDINGS_COLORS") {
-        return Some(PathBuf::from(p));
-    }
-    if let Some(p) = &config.theme.colors {
-        return Some(expand_home(p, var("HOME").map(PathBuf::from).as_deref()));
-    }
-    Some(config_dir()?.join("colors.json"))
+pub fn color_source(config: &Config) -> Option<ColorSource> {
+    let home = var("HOME").map(PathBuf::from);
+    let choice = var("TIDINGS_COLORS").map(PathBuf::from).or_else(|| {
+        config
+            .theme
+            .colors
+            .as_deref()
+            .map(|p| expand_home(p, home.as_deref()))
+    });
+    let dir = config_dir()?;
+    let noctalia = dir
+        .parent()
+        .map(|base| base.join("hypr").join("noctalia.lua"));
+    Some(ColorSource::pick(
+        choice.as_deref(),
+        dir.join("colors.json"),
+        noctalia,
+    ))
 }
 
 /// `~/rest` with `home` substituted; other paths unchanged.

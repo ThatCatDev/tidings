@@ -214,6 +214,25 @@ impl ToastStack {
         Some(frame)
     }
 
+    /// Each visible toast's glass where it is drawn at `now`, for the
+    /// compositor to blur behind. Toasts mostly faded out are left out, so
+    /// their blur does not outlive them.
+    #[must_use]
+    pub fn glass(&self, now: Instant) -> Vec<super::blur::Glass> {
+        self.motion
+            .frames(now)
+            .into_iter()
+            .filter(|f| f.alpha >= 0.5)
+            .filter_map(|f| {
+                let item = self.find(f.id)?;
+                Some(super::blur::Glass {
+                    rect: item.layout.card.translate(f.dx, f.y),
+                    radius: item.layout.radius,
+                })
+            })
+            .collect()
+    }
+
     /// Card rects of live toasts at their resting slots (input region).
     #[must_use]
     pub fn input_rects(&self) -> Vec<Rect> {

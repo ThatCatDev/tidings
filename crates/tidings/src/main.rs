@@ -156,7 +156,10 @@ fn run_daemon(args: &DaemonArgs) -> anyhow::Result<()> {
     let socket_path = ipc::socket_path().context("XDG_RUNTIME_DIR is not set")?;
     let mut config = DaemonConfig::new(socket_path);
     config.settings = config_file::load_or_default(config_file::config_path().as_deref());
-    config.colors_path = config_file::colors_path(&config.settings);
+    config.colors = config_file::color_source(&config.settings);
+    if let Some(source) = &config.colors {
+        tracing::info!("colours: {source}");
+    }
     if args.no_gestures {
         config.settings.gestures.enabled = false;
     }

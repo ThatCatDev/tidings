@@ -38,4 +38,24 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
-      - run: sh tests/colors.sh
+
+  release-build:
+    # Releases are built on the oldest supported Ubuntu so they run on it
+    # and everything newer (see release.yml); make sure that still works.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: System libraries
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked -p tidings
+      - name: The binary runs, and the installer installs it
+        run: |
+          target/release/tidings --version
+          dist=$(mktemp -d)
+          cp target/release/tidings install.sh "$dist/"
+          PREFIX="$dist/prefix" XDG_DATA_HOME="$dist/data" sh "$dist/install.sh"
+          "$dist/prefix/bin/tidings" --version
+          PREFIX="$dist/prefix" XDG_DATA_HOME="$dist/data" sh "$dist/install.sh" --uninstall
+          test ! -e "$dist/prefix/bin/tidings"

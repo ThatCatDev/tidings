@@ -6,7 +6,6 @@
 # it) or from a source checkout (it builds with cargo). It installs:
 #
 #   ~/.local/bin/tidings                    the daemon + `tidings ctl`
-#   ~/.local/bin/tidings-noctalia-colors    Noctalia palette -> colors.json
 #   ~/.local/share/dbus-1/services/...      D-Bus activation for
 #                                           org.freedesktop.Notifications, so a
 #                                           notification sent before the
@@ -31,6 +30,8 @@ usage() {
 }
 
 uninstall() {
+    # tidings-noctalia-colors: installed by older versions, or by hand from
+    # contrib/noctalia.
     rm -f "$BIN/tidings" "$BIN/tidings-noctalia-colors" "$SERVICE"
     # Drop cargo's record of the install too, if it made one.
     if command -v cargo >/dev/null 2>&1; then
@@ -58,7 +59,6 @@ esac
 if [ -x "$ROOT/tidings" ]; then
     # An unpacked release: the binary is right here.
     install -Dm755 "$ROOT/tidings" "$BIN/tidings"
-    colors="$ROOT/noctalia-colors.sh"
 else
     if ! command -v cargo >/dev/null 2>&1; then
         echo "install.sh: cargo not found. Install Rust (https://rustup.rs)," >&2
@@ -66,10 +66,7 @@ else
         exit 1
     fi
     cargo install --locked --path "$ROOT/crates/tidings" --root "$PREFIX"
-    colors="$ROOT/scripts/noctalia-colors.sh"
 fi
-
-install -Dm755 "$colors" "$BIN/tidings-noctalia-colors"
 
 install -d "$(dirname "$SERVICE")"
 cat > "$SERVICE" <<EOF

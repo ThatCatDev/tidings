@@ -12,6 +12,7 @@ use smithay_client_toolkit::shell::wlr_layer::{
     Anchor, KeyboardInteractivity, Layer, LayerSurface,
 };
 use smithay_client_toolkit::shm::slot::{Buffer, SlotPool};
+use smithay_client_toolkit::reexports::protocols::ext::background_effect::v1::client::ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1;
 use tiny_skia::Pixmap;
 
 use super::{App, SurfaceId};
@@ -30,6 +31,8 @@ pub struct SurfaceSpec {
     /// top, right, bottom, left.
     pub margin: (i32, i32, i32, i32),
     pub keyboard: KeyboardInteractivity,
+    /// Ask the compositor to blur behind the glass, if it can.
+    pub blur: bool,
 }
 
 /// A mapped (or mapping) layer surface.
@@ -39,6 +42,8 @@ pub struct Canvas {
     pub layer: LayerSurface,
     viewport: Option<WpViewport>,
     fractional: Option<WpFractionalScaleV1>,
+    /// The compositor blurring behind the glass on request.
+    blur: Option<ExtBackgroundEffectSurfaceV1>,
     pool: SlotPool,
     buffer: Option<Buffer>,
     format: wl_shm::Format,
@@ -66,6 +71,11 @@ impl Canvas {
             .viewporter
             .as_ref()
             .map(|v| v.get_viewport(&surface, qh, ()));
+        let blur = app
+            .blur
+            .as_ref()
+            .filter(|_| spec.blur)
+            .map(|b| b.effect_for(&surface, qh));
         let layer = app.layer_shell.create_layer_surface(
             qh,
             surface,
@@ -91,6 +101,7 @@ impl Canvas {
             layer,
             viewport,
             fractional,
+            blur,
             pool,
             buffer: None,
             format: app.shm_format,
@@ -247,6 +258,14 @@ impl Canvas {
         }
     }
 
+    /// Asks the compositor to blur behind `glass` (applies with the next
+    /// commit). Does nothing when it cannot blur on request.
+    pub fn set_blur(&self, compositor: &CompositorState, glass: &[super::blur::Glass]) {
+        if let Some(effect) = &self.blur {
+            super::blur::set_region(effect, compositor, glass);
+        }
+    }
+
     /// Restricts input to `rects` (logical px). An empty list means no input.
     pub fn set_input(&self, compositor: &CompositorState, rects: &[Rect]) {
         log::trace!("tidings-ui: input region of {:?}: {rects:?}", self.id);
@@ -272,6 +291,9 @@ impl Canvas {
 
 impl Drop for Canvas {
     fn drop(&mut self) {
+        if let Some(b) = self.blur.take() {
+            b.destroy();
+        }
         if let Some(f) = self.fractional.take() {
             f.destroy();
         }

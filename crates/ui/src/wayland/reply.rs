@@ -89,6 +89,11 @@ impl App {
         });
         if !focused && let Some(c) = self.canvas_mut(surface) {
             c.set_keyboard(Some(KeyboardInteractivity::Exclusive));
+            // Ask now rather than at the end of this turn of the loop, so the
+            // keyboard moves before the user (or a test) starts typing.
+            if let Err(e) = self.conn.flush() {
+                log::debug!("tidings-ui: flush failed: {e}");
+            }
         }
         self.reply_changed();
     }

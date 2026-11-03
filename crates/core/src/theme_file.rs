@@ -51,13 +51,28 @@ impl Rgb {
     pub fn to_hex(self) -> String {
         format!("#{:02x}{:02x}{:02x}", self.0, self.1, self.2)
     }
+
+    /// Relative luminance (WCAG): 0 for black, 1 for white.
+    #[must_use]
+    pub fn luminance(self) -> f32 {
+        let linear = |c: u8| {
+            let c = f32::from(c) / 255.0;
+            if c <= 0.040_45 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * linear(self.0) + 0.7152 * linear(self.1) + 0.0722 * linear(self.2)
+    }
 }
 
 /// Glass alpha used when the file doesn't say.
 pub const DEFAULT_SURFACE_ALPHA: f32 = 0.62;
 
 impl Theme {
-    /// Built-in dark theme (matches the Noctalia hook's dark surfaces).
+    /// Built-in dark theme (the Noctalia script in contrib/ uses the same
+    /// dark surfaces).
     #[must_use]
     pub fn dark() -> Self {
         Self {
@@ -166,6 +181,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn luminance_runs_from_black_to_white() {
+        assert!(Rgb(0, 0, 0).luminance().abs() < 1e-6);
+        assert!((Rgb(255, 255, 255).luminance() - 1.0).abs() < 1e-4);
+        // Green looks far brighter than blue.
+        assert!(Rgb(0, 255, 0).luminance() > 5.0 * Rgb(0, 0, 255).luminance());
+        assert!(Theme::dark().surface.luminance() < 0.1);
+        assert!(Theme::light().surface.luminance() > 0.8);
+    }
+
+    #[test]
     fn hex_round_trip() {
         assert_eq!(Rgb::from_hex("#ffb4a7"), Some(Rgb(0xff, 0xb4, 0xa7)));
         assert_eq!(Rgb::from_hex("0A0b0C"), Some(Rgb(10, 11, 12)));
@@ -218,29 +243,6 @@ mod tests {
         assert!((t.surface_alpha - 1.0).abs() < f32::EPSILON);
         let t = Theme::from_json(r#"{"surfaceAlpha": -1}"#).unwrap();
         assert!(t.surface_alpha.abs() < f32::EPSILON);
-    }
-
-    /// The Noctalia hook script's output (fixtures checked by tests/colors.sh)
-    /// parses, and its fixed surfaces agree with the built-in defaults.
-    #[test]
-    fn hook_script_fixtures_match_defaults() {
-        let dark = Theme::from_json(include_str!("../../../tests/fixtures/colors-dark.json"));
-        let light = Theme::from_json(include_str!("../../../tests/fixtures/colors-light.json"));
-        let accent = Rgb(0xff, 0xb4, 0xa7);
-        assert_eq!(
-            dark.unwrap(),
-            Theme {
-                primary: accent,
-                ..Theme::dark()
-            }
-        );
-        assert_eq!(
-            light.unwrap(),
-            Theme {
-                primary: accent,
-                ..Theme::light()
-            }
-        );
     }
 
     #[test]

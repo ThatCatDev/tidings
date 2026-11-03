@@ -4,7 +4,7 @@
 
 <h1 align="center">tidings</h1>
 
-<p align="center">A macOS-style Notification Centre for Hyprland, in Rust.</p>
+<p align="center">A macOS-style Notification Centre for Wayland desktops, in Rust.</p>
 
 ![The Notification Centre panel beside a collapsed toast, a hovered one and an expanded one, in the default glass theme](docs/screenshots/overview.png)
 
@@ -14,37 +14,50 @@
 - **Notification Centre panel.** A full-height glass panel on the right edge, with notifications grouped by app into stacks, Do Not Disturb, Clear all and per-group clear.
 - **Trackpad gesture.** Put two fingers on the right edge of the trackpad and swipe left: the panel **follows your fingers**. Let go past halfway, or flick, and it opens; otherwise it springs back. Two fingers swiping right close it.
 - **Themes.** Nine built in, from frosted glass to a terminal look, and every shape, colour and font setting can be changed.
+- **Fits in.** Real blur behind the glass wherever the compositor offers it, with no setup on Hyprland and niri, and colours that follow your wallpaper with Noctalia or any palette tool.
 
 | Toast | Expanded | Replying |
 |---|---|---|
 | ![A collapsed toast](docs/screenshots/toast-collapsed.png) | ![An expanded toast with its action buttons](docs/screenshots/toast-expanded.png) | ![An expanded toast with the reply field open](docs/screenshots/toast-reply-typing.png) |
 
-<sub>Rendered by tidings' own drawing code. On screen, Hyprland also blurs what is behind the glass.</sub>
+<sub>Rendered by tidings' own drawing code. On screen, the compositor also blurs what is behind the glass.</sub>
 
 One binary. No GTK, no Qt, no runtime scripting.
 
 ## Contents
 
-- [Requirements](#requirements)
+- [Where it runs](#where-it-runs)
 - [Install](#install): from a release, or from source
-- [Set up](#set-up): replace your old daemon, start with Hyprland, blur, the trackpad gesture
+- [Set up](#set-up): replace your old notification daemon, start it with your desktop, the trackpad gesture
+- [Integrations](#integrations): Hyprland, niri, SwayFX, Noctalia, Waybar
 - [Using it](#using-it)
 - [Configuration](#configuration), [themes](#themes) and [colours](#colours)
 - [Updating and uninstalling](#updating-and-uninstalling)
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
 
-## Requirements
+## Where it runs
 
-- **A Wayland compositor** with `wlr-layer-shell`, `fractional-scale-v1`, `viewporter` and `cursor-shape-v1`. tidings is made for Hyprland, and runs on others with those protocols (sway, for one), without the blur.
-- **`libxkbcommon`** and at least one font. Desktop systems have both already.
-- **A D-Bus session bus**, which every desktop session has.
+tidings draws its panel and toasts as Wayland *layer surfaces* (`wlr-layer-shell`, the protocol bars and launchers use), so it needs a compositor that supports it:
+
+| desktop | works | notes |
+|---|---|---|
+| Hyprland | yes | blur with no setup |
+| niri (26.04 and newer) | yes | blur with no setup |
+| sway, river, labwc, Wayfire | yes | no blur ([SwayFX](#swayfx) can blur) |
+| KDE Plasma, COSMIC | yes | turn off the desktop's own notifications first |
+| GNOME (Ubuntu's default desktop) | **no** | GNOME has no layer-shell and keeps its own notification service |
+| X11 sessions | **no** | Wayland only |
+
+Ubuntu itself is fine: on Ubuntu (22.04 or newer) with Kubuntu's Plasma, sway or another desktop from the table, the release build and the steps below work as they are.
+
+Besides the compositor you need `libxkbcommon`, a font and a D-Bus session, which every desktop has.
 
 ## Install
 
 ### From a release
 
-Each [release](https://github.com/ThatCatDev/tidings/releases) has a prebuilt x86-64 Linux build:
+Each [release](https://github.com/ThatCatDev/tidings/releases) has a prebuilt x86-64 Linux build, which runs on Ubuntu 22.04, Debian 12, Fedora, Arch and anything newer:
 
 ```sh
 tar xzf tidings-v*-x86_64-linux.tar.gz
@@ -54,15 +67,15 @@ cd tidings-v*-x86_64-linux
 
 ### From source
 
-You need Rust 1.89 or newer (from [rustup](https://rustup.rs) if your distribution's is older), a C toolchain and the `libxkbcommon` and Wayland development files:
+You need Rust 1.89 or newer (use [rustup](https://rustup.rs); Ubuntu's and Debian's packaged Rust is usually older), a C toolchain and the `libxkbcommon` and Wayland development files:
 
 ```sh
-# Arch
-sudo pacman -S --needed base-devel libxkbcommon wayland
 # Debian / Ubuntu
 sudo apt install build-essential libxkbcommon-dev libwayland-dev
 # Fedora
 sudo dnf install gcc libxkbcommon-devel wayland-devel
+# Arch
+sudo pacman -S --needed base-devel libxkbcommon wayland
 ```
 
 Then:
@@ -80,8 +93,7 @@ It installs for your user only, with no root needed, and is safe to run again:
 | file | what it is |
 |---|---|
 | `~/.local/bin/tidings` | the daemon, and `tidings ctl` to control it |
-| `~/.local/bin/tidings-noctalia-colors` | turns a [Noctalia](https://noctalia.dev) palette into tidings' colours (optional) |
-| `~/.local/share/dbus-1/services/dev.thatcat.tidings.service` | lets D-Bus start tidings if a notification arrives before your session has |
+| `~/.local/share/dbus-1/services/dev.thatcat.tidings.service` | lets D-Bus start tidings when the first notification arrives |
 
 Set `PREFIX` to install somewhere other than `~/.local`. Make sure `~/.local/bin` is on your `PATH`.
 
@@ -95,42 +107,25 @@ Only one program can be the notification daemon. tidings refuses to start while 
 busctl --user status org.freedesktop.Notifications | grep -E '^(Comm|CommandLine)='
 ```
 
-Remove it from your autostart and stop it: `pkill swaync`, `pkill mako` or `pkill dunst`, for example. Shells with their own notifications, such as Noctalia, need that turned off in their settings (for Noctalia, `[notification] enable_daemon = false`).
+Remove it from your autostart and stop it: `pkill mako`, `pkill dunst` or `pkill swaync`, for example. Desktops and shells with their own notifications (KDE Plasma, COSMIC, Noctalia, ...) need theirs turned off in their settings.
 
-### 2. Start tidings with Hyprland
+### 2. Start it with your desktop
 
-In your Hyprland config (Lua):
+Thanks to the D-Bus file, tidings starts by itself when the first notification arrives. Start it with your session as well, so the trackpad gesture and the panel work from the moment you log in, and bind a key to open the panel:
 
-```lua
--- start with the session
-hl.exec_cmd("tidings")
+| desktop | start with the session | open the panel with Super+A |
+|---|---|---|
+| Hyprland (Lua) | `hl.exec_cmd("tidings")` | `hl.bind("SUPER + A", hl.dsp.exec_cmd("tidings ctl toggle"))` |
+| Hyprland (`hyprland.conf`) | `exec-once = tidings` | `bind = SUPER, A, exec, tidings ctl toggle` |
+| sway | `exec tidings` | `bindsym $mod+a exec tidings ctl toggle` |
+| niri | `spawn-at-startup "tidings"` | `Mod+A { spawn "tidings" "ctl" "toggle"; }` in `binds` |
+| river | `riverctl spawn tidings` | `riverctl map normal Super A spawn 'tidings ctl toggle'` |
+| labwc | `tidings &` in `~/.config/labwc/autostart` | a `<keybind key="W-a">` running `tidings ctl toggle` |
+| anything else | run `tidings` at login | run `tidings ctl toggle` from a shortcut |
 
--- open and close the panel from the keyboard
-hl.bind("SUPER + A", hl.dsp.exec_cmd("tidings ctl toggle"))
-```
+To start it now, without logging out, run `setsid -f tidings`.
 
-With `hyprland.conf` it is `exec-once = tidings` and `bind = SUPER, A, exec, tidings ctl toggle`.
-
-To start it now, without logging out, run `tidings &` (or `setsid -f tidings` so it outlives the terminal).
-
-On sway: `exec tidings` and `bindsym $mod+a exec tidings ctl toggle`.
-
-### 3. Blur behind the glass
-
-Hyprland draws the blur, so it needs a layer rule for each of tidings' surfaces:
-
-```lua
-hl.layer_rule({ name = "tidings-panel", match = { namespace = "^tidings-panel$" },
-                blur = true, ignore_alpha = 0.3, xray = false })
-hl.layer_rule({ name = "tidings-toast", match = { namespace = "^tidings-toast$" },
-                blur = true, ignore_alpha = 0.4, xray = false })
-```
-
-For `hyprland.conf`, write the same rules in its layer rule syntax (see the [Hyprland wiki](https://wiki.hypr.land/configuring/core/rules/layer-rules/)): blur on, `ignore_alpha` 0.3 for the `tidings-panel` namespace and 0.4 for `tidings-toast`.
-
-`ignore_alpha` matters. Hyprland only blurs pixels more opaque than it, so it must sit below the glass (the `clear` theme's panel is 0.4 opaque) and, for toasts, above their soft shadow (at most 0.28). Otherwise the shadow blurs into a grey halo.
-
-### 4. The trackpad gesture (optional)
+### 3. The trackpad gesture (optional)
 
 The swipe reads the trackpad directly (read-only; it never takes the device from your desktop). Allow your user to read the built-in trackpad, and nothing else, with one udev rule:
 
@@ -142,7 +137,7 @@ sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=input --
 
 Restart tidings afterwards. Without the rule everything else works, just not the swipe. Turn the gesture off entirely with `[gestures] enabled = false` in the config.
 
-### 5. Try it
+### 4. Try it
 
 ```sh
 notify-send "Hello" "from tidings"
@@ -150,9 +145,52 @@ notify-send -A open=Open -A later=Later "With buttons" "Expand the toast to see 
 tidings ctl toggle
 ```
 
-### A button in your bar (optional)
+## Integrations
 
-Any bar that can run a command on click can open the panel with `tidings ctl toggle`. For Noctalia, add `"tidings"` to a bar section and:
+None of these are needed; each makes tidings fit in better where the tool is there.
+
+### Blur
+
+tidings asks the compositor to blur behind its glass through the `ext-background-effect` protocol, shaped to the rounded panel and toasts. Compositors that support it, such as Hyprland and niri 26.04 or newer, blur with no configuration. Elsewhere the glass is simply translucent; the `frosted`, `solid` and `flat` [themes](#themes) look right without blur.
+
+A theme with `blur = false` asks for none.
+
+#### Layer rules
+
+Compositors can also blur by rule, matching tidings' layer namespaces: `tidings-panel` and `tidings-toast` (or `tidings-panel-noblur` and `tidings-toast-noblur` when the theme turns blur off, so rules don't match). Use them on a compositor without the protocol, or to change how the blur looks.
+
+On Hyprland (Lua; for `hyprland.conf` see its [layer rules](https://wiki.hypr.land/configuring/core/rules/layer-rules/)):
+
+```lua
+hl.layer_rule({ name = "tidings-panel", match = { namespace = "^tidings-panel$" },
+                blur = true, ignore_alpha = 0.3, xray = false })
+hl.layer_rule({ name = "tidings-toast", match = { namespace = "^tidings-toast$" },
+                blur = true, ignore_alpha = 0.4, xray = false })
+```
+
+With a rule, `ignore_alpha` matters: Hyprland only blurs pixels more opaque than it, so it must sit below the glass (the `clear` theme's panel is 0.4 opaque) and, for toasts, above their soft shadow (at most 0.28), or the shadow blurs into a grey halo. Blur requested through the protocol has no such catch: it covers exactly the glass.
+
+#### SwayFX
+
+[SwayFX](https://github.com/WillPower3309/swayfx) blurs layer surfaces by rule:
+
+```
+layer_effects "tidings-panel" blur enable
+layer_effects "tidings-toast" blur enable
+```
+
+### Noctalia
+
+[Noctalia](https://noctalia.dev) is a desktop shell. With it, tidings follows its wallpaper colours by itself: when there is no `colors.json`, tidings reads the palette Noctalia generates and keeps up as it changes (see [colours](#colours)).
+
+Turn off Noctalia's own notification service so tidings can start, in `~/.config/noctalia/config.toml`:
+
+```toml
+[notification]
+enable_daemon = false
+```
+
+A bell in Noctalia's bar that opens the panel: add `"tidings"` to one of the bar's sections (`start`, `center` or `end` under `[bar.default]`), and
 
 ```toml
 [widget.tidings]
@@ -164,6 +202,21 @@ tooltip = "Notification Centre"
 left = "exec tidings ctl toggle"
 right = "exec tidings ctl dnd toggle"
 ```
+
+### Waybar
+
+A button that opens the panel (right click: Do Not Disturb). Add `"custom/tidings"` to a module list, and:
+
+```json
+"custom/tidings": {
+    "format": "🔔",
+    "tooltip": false,
+    "on-click": "tidings ctl toggle",
+    "on-click-right": "tidings ctl dnd toggle"
+}
+```
+
+Any other bar works the same way: run `tidings ctl toggle` on click.
 
 ## Using it
 
@@ -212,7 +265,7 @@ A theme sets the look: corner radius, border width, colour and opacity, transpar
 | `glass` (default) | Frosted, translucent and pill-shaped, like the macOS Notification Centre. |
 | `frosted` | Thicker, milkier glass: more opaque, softer rims, rounder corners. |
 | `clear` | Barely-there glass held together by crisp light rims. |
-| `solid` | Opaque surfaces in your Noctalia colours, rounded but not pills. |
+| `solid` | Opaque surfaces in your colour scheme's colours, rounded but not pills. |
 | `flat` | Minimal: opaque, small corners, hairline borders and no shadow. |
 | `paper` | Light, warm off-white paper with a terracotta accent and soft shadows. |
 | `nord` | Glass in the Nord palette: polar night surfaces, frost-blue accents. |
@@ -250,13 +303,39 @@ tidings theme check mine                  # or a path to a .toml file
 
 Theme files are checked like the config. A broken theme is logged and `glass` is used instead.
 
-Colours are `#rrggbb` or a slot of the colour scheme (`surface`, `surface_variant`, `on_surface`, `on_surface_variant`, `primary`, `on_primary`, `error`, `outline`, or `tint`), and slots follow Noctalia. A theme's `[palette]` replaces colours from `colors.json` outright.
-
-Blur is drawn by Hyprland. With `blur = true` the surfaces use the `tidings-panel` and `tidings-toast` layer namespaces, and with `blur = false` they use `tidings-panel-noblur` and `tidings-toast-noblur`. Hyprland skips pixels below a layer rule's `ignore_alpha`, so keep blurred opacities above it and the toast shadow below it.
+Blur, and the layer namespaces for compositor rules, are under [Integrations](#blur).
 
 ### Colours
 
-The colours come from `~/.config/tidings/colors.json`. Override the path with `TIDINGS_COLORS` or the config's `theme.colors`. tidings watches the file and applies changes live. With [Noctalia](https://noctalia.dev), have its `colors_changed` hook run `tidings-noctalia-colors`, and tidings follows your wallpaper palette.
+A theme's colours are `#rrggbb` or a slot of the colour scheme (`surface`, `surface_variant`, `on_surface`, `on_surface_variant`, `primary`, `on_primary`, `error`, `outline`, or `tint`). The slots come from the colour scheme below, so a theme can follow your wallpaper; a theme's `[palette]` replaces slots outright.
+
+The colour scheme comes from the first of these that exists:
+
+1. **`~/.config/tidings/colors.json`**, which any palette tool (matugen, wallust, pywal templates, a script of your own) can write.
+2. **Noctalia's palette**, read directly when Noctalia is installed (see [Noctalia](#noctalia)).
+3. tidings' own dark colours.
+
+Set `theme.colors` in the config to a file to use that instead, or to `"noctalia"` to always use Noctalia's palette; `TIDINGS_COLORS` overrides both. tidings checks for changes every second and recolours live; the log's `colours:` line says which source it chose.
+
+`colors.json` looks like this. Every key is optional; missing ones keep the default:
+
+```json
+{
+  "mode": "dark",
+  "surface": "#18181d",
+  "surfaceVariant": "#22232a",
+  "onSurface": "#e4e1e7",
+  "onSurfaceVariant": "#a3abbd",
+  "primary": "#a8c7fa",
+  "onPrimary": "#0b0e13",
+  "error": "#d3453b",
+  "onError": "#ffffff",
+  "outline": "#a0b2d2",
+  "surfaceAlpha": 0.62
+}
+```
+
+`mode` is `dark` or `light`, `surfaceAlpha` (0 to 1) is how opaque the glass is when the theme does not say. Write the file somewhere else and rename it into place, so tidings never reads half of it.
 
 ## Updating and uninstalling
 
@@ -277,9 +356,11 @@ pkill -x tidings; TIDINGS_LOG=debug tidings
 ```
 
 - **"org.freedesktop.Notifications is already owned by another notification daemon"**: another daemon is running. See [Set up, step 1](#1-stop-your-old-notification-daemon).
-- **No blur**: check the layer rules ([step 3](#3-blur-behind-the-glass)) and that the theme has `blur = true`. Screenshots never show Hyprland's blur, so look at the screen itself.
-- **The swipe does nothing**: the log says whether a trackpad was found. Without the udev rule ([step 4](#4-the-trackpad-gesture-optional)) it can't read one.
-- **Settings don't apply**: run `tidings config check` (and `tidings theme check`), then restart tidings. Settings are read at startup; only the colours file is watched live.
+- **"this compositor does not support wlr-layer-shell"**: tidings can't run on this desktop (GNOME, for one). See [Where it runs](#where-it-runs).
+- **No blur**: the compositor may not blur on request (see [Blur](#blur)); the log says `compositor blur on request: no` then. Check the theme has `blur = true`. Screenshots don't show compositor blur, so look at the screen itself.
+- **The swipe does nothing**: the log says whether a trackpad was found. Without the udev rule ([step 3](#3-the-trackpad-gesture-optional)) it can't read one.
+- **Settings don't apply**: run `tidings config check` (and `tidings theme check`), then restart tidings. Settings are read at startup; only the colours are followed live.
+- **The wrong colours**: the log's `colours:` line says where they come from; see [colours](#colours).
 - **Chrome shows Reply as a plain button**: see the Chrome note under [Using it](#using-it).
 
 ## Development
@@ -303,7 +384,6 @@ cargo clippy --workspace --all-targets -- -D warnings   # clippy::pedantic
 cargo test --workspace          # unit + integration (private dbus-daemon, never the session bus)
                                 # (the UI end-to-end tests need sway, wtype, wl-clipboard and grim;
                                 #  they run a private headless sway and skip without it)
-sh tests/colors.sh              # the Noctalia colours script
 scripts/coverage.sh             # coverage report + the 80%-per-file gate (needs cargo-llvm-cov, jq)
 cargo run -p tidings-ui --example demo --release        # UI demo on the live compositor
 cargo run -p tidings-ui --example demo --release -- themes DIR [SCALE]   # render every theme to PNGs (the README's gallery: SCALE 1)

@@ -22,7 +22,7 @@ use smithay_client_toolkit::reexports::protocols_wlr::virtual_pointer::v1::clien
 };
 use tidings_core::config::AnimationConfig;
 use tidings_core::look::Look;
-use tidings_core::ui::{UiEvent, UiHandle, UiUpdate};
+use tidings_core::ui::{PanelCommand, UiEvent, UiHandle, UiUpdate};
 use tidings_core::view::{ToastView, ViewModel};
 use tidings_ui::compose::ReplyDraft;
 use tidings_ui::geom::{Point, Size};
@@ -385,6 +385,8 @@ pub struct Session<'a> {
     sway: &'a Compositor,
     pub ui: Box<dyn UiHandle>,
     events: Receiver<UiEvent>,
+    /// Events received but not yet expected.
+    skipped: std::cell::RefCell<std::collections::VecDeque<UiEvent>>,
     pub pointer: Pointer,
     painter: Painter,
 }
@@ -421,6 +423,7 @@ impl<'a> Session<'a> {
             sway,
             ui,
             events,
+            skipped: std::cell::RefCell::default(),
             pointer: Pointer::connect(sway.socket()),
             painter: Painter::with_style(Style::new(&Look::default())),
         }
@@ -437,18 +440,22 @@ impl<'a> Session<'a> {
         self.settle();
     }
 
-    /// Waits for an event matching `want`, skipping others.
+    /// Waits for an event matching `want`. Events it passes over are kept
+    /// for later calls, oldest first.
     #[track_caller]
     pub fn expect(&self, want: impl Fn(&UiEvent) -> bool) -> UiEvent {
+        let mut skipped = self.skipped.borrow_mut();
+        if let Some(i) = skipped.iter().position(&want) {
+            return skipped.remove(i).unwrap_or_else(|| unreachable!());
+        }
         let deadline = Instant::now() + PATIENCE;
-        let mut seen = Vec::new();
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
             match self.events.recv_timeout(left) {
                 Ok(e) if want(&e) => return e,
-                Ok(e) => seen.push(e),
+                Ok(e) => skipped.push_back(e),
                 Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => {
-                    panic!("the expected event never came; got {seen:?}")
+                    panic!("the expected event never came; got {skipped:?}")
                 }
             }
         }
@@ -499,6 +506,17 @@ impl<'a> Session<'a> {
         let p = self.toast_point(t, draft, target);
         self.pointer.move_to(f64::from(p.x), f64::from(p.y));
         self.pointer.click();
+        self.caught_up();
+    }
+
+    /// Waits until the UI has handled everything sent to it so far. Closing
+    /// the (already closed) panel answers at once, and the UI only answers
+    /// after the input that arrived before: so a click has been handled, and
+    /// the keyboard asked for, before the test goes on to type. Only for
+    /// when the panel is closed.
+    pub fn caught_up(&self) {
+        self.ui.send(UiUpdate::Panel(PanelCommand::AnimateTo(0.0)));
+        self.expect(|e| *e == UiEvent::PanelSettled { open: false });
     }
 
     /// Whether the top toast's glass differs from the empty background.

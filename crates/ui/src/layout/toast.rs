@@ -29,6 +29,8 @@ pub struct ToastLayout {
     pub scene: Scene,
     /// The toast's own rect within `scene`.
     pub card: Rect,
+    /// The corner radius of its glass.
+    pub radius: f32,
 }
 
 /// Lays out one toast. `hovered` is the target under the pointer, if any;
@@ -124,6 +126,7 @@ pub fn layout_toast(
         id: c.id,
         scene,
         card: bounds,
+        radius,
     }
 }
 
