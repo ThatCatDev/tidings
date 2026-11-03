@@ -78,7 +78,7 @@ fn sample(expanded: bool) -> ViewModel {
         placeholder: Some("Reply to Thunderbird…".into()),
         submit: None,
     });
-    mail.actions = vec![action("archive", "Archive"), action("spam", "Mark as Spam")];
+    mail.actions = vec![action("archive", "Archive"), action("junk", "Junk")];
     let mut photo = card(
         11,
         "Firefox",
@@ -181,7 +181,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if mode == "themes" {
         let dir = args.next().unwrap_or_else(|| ".".into());
-        return render_themes(std::path::Path::new(&dir));
+        // Device pixels per logical pixel: 1.5 by default, 1 for small files.
+        let scale = args.next().and_then(|s| s.parse().ok()).unwrap_or(1.5);
+        return render_themes(std::path::Path::new(&dir), scale);
     }
 
     let hold = Duration::from_secs_f32(args.next().and_then(|s| s.parse().ok()).unwrap_or(3.0));
@@ -308,7 +310,7 @@ fn render_states(dir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>
 
 /// Renders every built-in theme: the panel beside a toast collapsed, hovered
 /// and expanded, over a colourful backdrop standing in for blurred windows.
-fn render_themes(dir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+fn render_themes(dir: &std::path::Path, scale: f32) -> Result<(), Box<dyn std::error::Error>> {
     use tidings_core::config::theme::{BUILTIN, ThemeFile};
     use tidings_ui::geom::Size;
     use tidings_ui::layout::{Interaction, layout_panel, layout_toast};
@@ -319,7 +321,6 @@ fn render_themes(dir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>
         Color, GradientStop, LinearGradient, Paint, PixmapPaint, Point, Rect, SpreadMode, Transform,
     };
 
-    let scale = 1.5;
     let (panel_w, panel_h) = (380.0, 620.0);
     let gap = 24.0;
     let toast_w = 384.0;

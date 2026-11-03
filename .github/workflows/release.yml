@@ -92,7 +92,9 @@ jobs:
         run: |
           dist="tidings-v${VERSION}-x86_64-linux"
           mkdir "$dist"
-          cp target/release/tidings scripts/noctalia-colors.sh README.md LICENSE "$dist/"
+          # install.sh installs the prebuilt binary when it sits next to it.
+          cp target/release/tidings scripts/noctalia-colors.sh install.sh \
+            config.example.toml README.md LICENSE "$dist/"
           tar czf "$dist.tar.gz" "$dist"
           sha256sum "$dist.tar.gz" > "$dist.tar.gz.sha256"
           cog changelog --at "v${VERSION}" > notes.md
