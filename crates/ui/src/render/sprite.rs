@@ -104,34 +104,27 @@ pub fn blend(dst: &mut Pixmap, src: &Pixmap, x: i32, y: i32, opacity: f32, clip:
         x1 = x1.min(i64::from(c.x) + i64::from(c.w));
         y1 = y1.min(i64::from(c.y) + i64::from(c.h));
     }
-    let ix = |v: i64| usize::try_from(v).ok();
-    let (Some(cols), Some(dw), Some(sw)) = (ix(x1 - x0), ix(dw), ix(sw)) else {
-        return;
-    };
-    if cols == 0 || y0 >= y1 {
+    if x1 <= x0 || y1 <= y0 {
         return;
     }
-    let (Some(dx0), Some(sx0)) = (ix(x0), ix(x0 - x)) else {
-        return;
-    };
+    // Every offset below is non-negative: x0 >= max(x, 0), y0 >= max(y, 0).
+    let ix = |v: i64| usize::try_from(v).unwrap_or(0);
+    let (cols, dw, sw) = (ix(x1 - x0), ix(dw), ix(sw));
+    let (dx0, sx0) = (ix(x0), ix(x0 - x));
     let src = src.data();
     let dst = dst.data_mut();
     for row in y0..y1 {
-        let (Some(dy), Some(sy)) = (ix(row), ix(row - y)) else {
-            return;
-        };
-        let d = (dy * dw + dx0) * 4;
-        let s = (sy * sw + sx0) * 4;
-        let (Some(d), Some(s)) = (dst.get_mut(d..d + cols * 4), src.get(s..s + cols * 4)) else {
-            return;
-        };
-        for (d, s) in d
-            .as_chunks_mut::<4>()
-            .0
-            .iter_mut()
-            .zip(s.as_chunks::<4>().0)
-        {
-            *d = over(u32::from_ne_bytes(*d), u32::from_ne_bytes(*s), o).to_ne_bytes();
+        let d = (ix(row) * dw + dx0) * 4;
+        let s = (ix(row - y) * sw + sx0) * 4;
+        if let (Some(d), Some(s)) = (dst.get_mut(d..d + cols * 4), src.get(s..s + cols * 4)) {
+            for (d, s) in d
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(s.as_chunks::<4>().0)
+            {
+                *d = over(u32::from_ne_bytes(*d), u32::from_ne_bytes(*s), o).to_ne_bytes();
+            }
         }
     }
 }
@@ -214,6 +207,44 @@ mod tests {
         assert_eq!(px(&dst, 2, 1).alpha(), 0);
         // Entirely off-screen is a no-op, not a panic.
         blend(&mut dst, &src, 100, 100, 1.0, None);
+    }
+
+    #[test]
+    fn blend_without_opacity_or_overlap_changes_nothing() {
+        let blue = Color::from_rgba8(0, 0, 255, 255);
+        let src = filled(2, 2, Color::WHITE);
+        let untouched = filled(4, 4, blue);
+        let mut dst = untouched.clone();
+        blend(&mut dst, &src, 1, 1, 0.0, None);
+        blend(&mut dst, &src, 1, 1, 0.001, None);
+        // Above, left of and below the destination.
+        blend(&mut dst, &src, 1, -2, 1.0, None);
+        blend(&mut dst, &src, -2, 1, 1.0, None);
+        blend(&mut dst, &src, 1, 4, 1.0, None);
+        // A clip that misses the sprite.
+        let clip = PxRect {
+            x: 3,
+            y: 3,
+            w: 1,
+            h: 1,
+        };
+        blend(&mut dst, &src, 0, 0, 1.0, Some(clip));
+        assert_eq!(dst, untouched);
+    }
+
+    #[test]
+    fn over_handles_clear_and_empty_pixels() {
+        let red = u32::from_ne_bytes([200, 0, 0, 200]);
+        let blue = u32::from_ne_bytes([0, 0, 255, 255]);
+        assert_eq!(
+            over(blue, 0, 256),
+            blue,
+            "clear source keeps the destination"
+        );
+        assert_eq!(over(0, red, 256), red, "empty destination takes the source");
+        assert_eq!(over(blue, blue, 256), blue, "opaque source replaces");
+        let half = over(0, red, 128).to_ne_bytes();
+        assert_eq!(half, [100, 0, 0, 100], "faded source");
     }
 
     #[test]

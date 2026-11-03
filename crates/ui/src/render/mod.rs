@@ -433,9 +433,8 @@ impl Shadow {
         let pixels = pm.pixels_mut();
         for y in y0..y1 {
             for x in x0..x1 {
-                let Ok(idx) = usize::try_from(y * width + x) else {
-                    continue;
-                };
+                // Out of range (never, on 32-bit and up) reads as outside.
+                let idx = usize::try_from(y * width + x).unwrap_or(usize::MAX);
                 let inside = coverage_mask.get(idx).copied().unwrap_or(0);
                 if inside == 0 {
                     continue;
@@ -636,11 +635,11 @@ fn glyph(
             // Crescent: a disc with an offset disc cut away.
             let r = w.min(h) / 2.0;
             let (cx, cy) = (x + w / 2.0, y + h / 2.0);
-            let Some(mut m) = Mask::new(pm.width(), pm.height()) else {
-                return;
-            };
-            let Some(bite) = PathBuilder::from_circle(cx + r * 0.55, cy - r * 0.45, r * 0.85)
-            else {
+            let (Some(mut m), Some(disc), Some(bite)) = (
+                Mask::new(pm.width(), pm.height()),
+                PathBuilder::from_circle(cx, cy, r),
+                PathBuilder::from_circle(cx + r * 0.55, cy - r * 0.45, r * 0.85),
+            ) else {
                 return;
             };
             m.fill_path(&bite, FillRule::Winding, true, Transform::identity());
@@ -648,15 +647,13 @@ fn glyph(
             if let Some(path) = clip.and_then(px_rect_path) {
                 m.intersect_path(&path, FillRule::Winding, false, Transform::identity());
             }
-            if let Some(disc) = PathBuilder::from_circle(cx, cy, r) {
-                pm.fill_path(
-                    &disc,
-                    &solid(c),
-                    FillRule::Winding,
-                    Transform::identity(),
-                    Some(&m),
-                );
-            }
+            pm.fill_path(
+                &disc,
+                &solid(c),
+                FillRule::Winding,
+                Transform::identity(),
+                Some(&m),
+            );
         }
     }
 }
@@ -871,5 +868,319 @@ mod tests {
         assert!((side - expect).abs() <= 3.0, "{side} vs {expect}");
         // Never under the card itself.
         assert_eq!(alpha(70, 40), 0);
+    }
+
+    fn solid_rect(rect: Rect) -> Node {
+        Node::RoundRect {
+            rect,
+            radius: 0.0,
+            fill: Some(Fill::solid(Role::OnSurface)),
+            stroke: None,
+        }
+    }
+
+    fn glyph_node(rect: Rect, kind: GlyphKind) -> Node {
+        Node::Glyph {
+            rect,
+            kind,
+            fill: Fill::solid(Role::OnSurface),
+        }
+    }
+
+    /// Paints `nodes` into a transparent `w` x `h` scene at scale 1.
+    fn paint_nodes(w: f32, h: f32, nodes: Vec<Node>) -> Pixmap {
+        let mut scene = Scene::new(Size::new(w, h));
+        scene.nodes = nodes;
+        painter()
+            .paint(&scene, &Palette::default(), 1.0)
+            .unwrap_or_else(|| panic!("pixmap"))
+    }
+
+    fn alpha_at(pm: &Pixmap, x: u32, y: u32) -> u8 {
+        pm.pixel(x, y)
+            .map_or(0, tiny_skia::PremultipliedColorU8::alpha)
+    }
+
+    /// Bounding box `(x0, y0, x1, y1)` (inclusive) of the painted pixels.
+    fn painted_box(pm: &Pixmap) -> Option<(u32, u32, u32, u32)> {
+        let lit: Vec<(u32, u32)> = (0..pm.height())
+            .flat_map(|y| (0..pm.width()).map(move |x| (x, y)))
+            .filter(|&(x, y)| alpha_at(pm, x, y) > 0)
+            .collect();
+        let xs = lit.iter().map(|p| p.0);
+        let ys = lit.iter().map(|p| p.1);
+        Some((xs.clone().min()?, ys.clone().min()?, xs.max()?, ys.max()?))
+    }
+
+    #[test]
+    fn nested_clips_intersect_and_pop_back_to_the_outer_clip() {
+        let full = Rect::new(0.0, 0.0, 40.0, 40.0);
+        let pm = paint_nodes(
+            40.0,
+            40.0,
+            vec![
+                Node::PushClip(Rect::new(0.0, 0.0, 20.0, 20.0)),
+                Node::PushClip(Rect::new(10.0, 10.0, 20.0, 20.0)),
+                solid_rect(full),
+                Node::PopClip,
+                Node::PopClip,
+            ],
+        );
+        assert_eq!(painted_box(&pm), Some((10, 10, 19, 19)));
+
+        let pm = paint_nodes(
+            40.0,
+            40.0,
+            vec![
+                Node::PushClip(Rect::new(0.0, 0.0, 20.0, 20.0)),
+                Node::PushClip(Rect::new(10.0, 10.0, 20.0, 20.0)),
+                Node::PopClip,
+                solid_rect(full),
+                Node::PopClip,
+            ],
+        );
+        assert_eq!(painted_box(&pm), Some((0, 0, 19, 19)), "outer clip again");
+    }
+
+    #[test]
+    fn disjoint_nested_clips_hide_everything() {
+        let full = Rect::new(0.0, 0.0, 40.0, 40.0);
+        let pm = paint_nodes(
+            40.0,
+            40.0,
+            vec![
+                Node::PushClip(Rect::new(0.0, 0.0, 10.0, 10.0)),
+                Node::PushClip(Rect::new(20.0, 20.0, 10.0, 10.0)),
+                solid_rect(full),
+                Node::Sheet {
+                    rect: full,
+                    radius: 0.0,
+                    fill: Fill::solid(Role::OnSurface),
+                    stroke: None,
+                    cutout: Rect::new(0.0, 0.0, 1.0, 1.0),
+                    cutout_radius: 0.0,
+                },
+                glyph_node(full, GlyphKind::Moon),
+                glyph_node(full, GlyphKind::Close),
+                Node::Text {
+                    rect: full,
+                    text: "Hi".into(),
+                    style: TextStyle::Summary,
+                    fill: Fill::solid(Role::OnSurface),
+                    align: Align::Left,
+                    wrap_width: 40.0,
+                },
+                Node::PopClip,
+                Node::PopClip,
+            ],
+        );
+        assert_eq!(painted_box(&pm), None);
+    }
+
+    #[test]
+    fn transparent_fills_and_strokes_paint_nothing() {
+        let clear = Fill::new(Role::OnSurface, 0.0);
+        let pm = paint_nodes(
+            20.0,
+            20.0,
+            vec![Node::RoundRect {
+                rect: Rect::new(0.0, 0.0, 20.0, 20.0),
+                radius: 4.0,
+                fill: Some(clear),
+                stroke: Some(style::Stroke {
+                    fill: clear,
+                    width: 2.0,
+                }),
+            }],
+        );
+        assert_eq!(painted_box(&pm), None);
+    }
+
+    #[test]
+    fn strokes_are_drawn_just_inside_the_edge() {
+        let pm = paint_nodes(
+            20.0,
+            20.0,
+            vec![Node::RoundRect {
+                rect: Rect::new(0.0, 0.0, 20.0, 20.0),
+                radius: 0.0,
+                fill: None,
+                stroke: Some(style::Stroke {
+                    fill: Fill::solid(Role::OnSurface),
+                    width: 2.0,
+                }),
+            }],
+        );
+        for (x, y) in [(0, 10), (1, 10), (19, 10), (10, 0), (10, 19)] {
+            assert_eq!(alpha_at(&pm, x, y), 255, "edge ({x}, {y})");
+        }
+        assert_eq!(alpha_at(&pm, 2, 10), 0);
+        assert_eq!(alpha_at(&pm, 10, 10), 0, "hollow");
+    }
+
+    #[test]
+    fn sheets_skip_their_cutout_and_respect_the_clip() {
+        let pm = paint_nodes(
+            40.0,
+            40.0,
+            vec![
+                Node::PushClip(Rect::new(0.0, 0.0, 40.0, 20.0)),
+                Node::Sheet {
+                    rect: Rect::new(0.0, 0.0, 40.0, 40.0),
+                    radius: 0.0,
+                    fill: Fill::solid(Role::OnSurface),
+                    stroke: None,
+                    cutout: Rect::new(10.0, 10.0, 20.0, 20.0),
+                    cutout_radius: 0.0,
+                },
+                Node::PopClip,
+            ],
+        );
+        assert_eq!(alpha_at(&pm, 5, 5), 255, "sheet");
+        assert_eq!(alpha_at(&pm, 20, 15), 0, "cutout");
+        assert_eq!(alpha_at(&pm, 5, 30), 0, "clipped");
+    }
+
+    #[test]
+    fn degenerate_shadows_paint_nothing() {
+        let shadow = |rect, spread, alpha| Node::Shadow {
+            rect,
+            radius: 4.0,
+            spread,
+            offset_y: 2.0,
+            fill: Fill::new(Role::Fixed(Rgb(0, 0, 0)), alpha),
+        };
+        let card = Rect::new(10.0, 10.0, 20.0, 20.0);
+        let pm = paint_nodes(
+            40.0,
+            40.0,
+            vec![
+                shadow(card, 0.0, 0.3),
+                shadow(card, 6.0, 0.0),
+                shadow(Rect::new(10.0, 10.0, 0.0, 0.0), 6.0, 0.3),
+            ],
+        );
+        assert_eq!(painted_box(&pm), None);
+    }
+
+    #[test]
+    fn photos_fill_the_round_avatar() {
+        let photo = tidings_core::model::Image::Rgba {
+            width: 2,
+            height: 2,
+            pixels: [255, 0, 0, 255].repeat(4).into(),
+        };
+        let pm = paint_nodes(
+            20.0,
+            20.0,
+            vec![Node::Image {
+                rect: Rect::new(0.0, 0.0, 20.0, 20.0),
+                radius: 10.0,
+                image: Some(photo),
+                fallback: Monogram {
+                    letter: 'M',
+                    tint: 0,
+                },
+            }],
+        );
+        let centre = pm.pixel(10, 10);
+        assert!(centre.is_some_and(|p| p.red() == 255 && p.alpha() == 255));
+        assert!(pm.pixel(10, 1).is_some_and(|p| p.red() > 200), "edge");
+        assert_eq!(alpha_at(&pm, 0, 0), 0, "round: the corner stays clear");
+    }
+
+    #[test]
+    fn icons_sit_inset_on_a_plate() {
+        // A blue square with a transparent ring: an icon with its own outline.
+        let mut px = Vec::new();
+        for y in 0..10u32 {
+            for x in 0..10u32 {
+                let edge = x == 0 || y == 0 || x == 9 || y == 9;
+                px.extend_from_slice(&if edge { [0, 0, 0, 0] } else { [0, 0, 255, 255] });
+            }
+        }
+        let icon = tidings_core::model::Image::Rgba {
+            width: 10,
+            height: 10,
+            pixels: px.into(),
+        };
+        let pm = paint_nodes(
+            40.0,
+            40.0,
+            vec![Node::Image {
+                rect: Rect::new(0.0, 0.0, 40.0, 40.0),
+                radius: 20.0,
+                image: Some(icon),
+                fallback: Monogram {
+                    letter: 'M',
+                    tint: 0,
+                },
+            }],
+        );
+        let plate = Palette::default().resolve(fills::ICON_PLATE);
+        let rim = pm.pixel(20, 2);
+        assert!(rim.is_some_and(|p| close_to(p, plate, 2)), "{rim:?}");
+        assert!(pm.pixel(20, 20).is_some_and(|p| p.blue() > 200), "icon");
+        assert_eq!(alpha_at(&pm, 0, 0), 0, "round plate");
+    }
+
+    #[test]
+    fn close_glyph_is_a_cross() {
+        let pm = paint_nodes(
+            20.0,
+            20.0,
+            vec![glyph_node(
+                Rect::new(2.0, 2.0, 16.0, 16.0),
+                GlyphKind::Close,
+            )],
+        );
+        for (x, y) in [(10, 10), (3, 3), (16, 16), (16, 3), (3, 16)] {
+            assert!(alpha_at(&pm, x, y) > 100, "on a diagonal ({x}, {y})");
+        }
+        for (x, y) in [(10, 3), (3, 10), (16, 10), (10, 16)] {
+            assert_eq!(alpha_at(&pm, x, y), 0, "between the arms ({x}, {y})");
+        }
+    }
+
+    #[test]
+    fn chevrons_point_down_or_up() {
+        // On a 48 px box the 24-unit grid doubles: the tip is at (24, 30)
+        // pointing down, (24, 18) pointing up.
+        let rect = Rect::new(0.0, 0.0, 48.0, 48.0);
+        let down = paint_nodes(48.0, 48.0, vec![glyph_node(rect, GlyphKind::ChevronDown)]);
+        let up = paint_nodes(48.0, 48.0, vec![glyph_node(rect, GlyphKind::ChevronUp)]);
+        assert!(alpha_at(&down, 24, 29) > 100 && alpha_at(&down, 24, 18) == 0);
+        assert!(alpha_at(&up, 24, 18) > 100 && alpha_at(&up, 24, 29) == 0);
+        // Mirror images of each other.
+        let flip = |(x0, y0, x1, y1): (u32, u32, u32, u32)| (x0, 47 - y1, x1, 47 - y0);
+        assert_eq!(painted_box(&down).map(flip), painted_box(&up));
+    }
+
+    #[test]
+    fn moon_is_a_clipped_crescent() {
+        let rect = Rect::new(0.0, 0.0, 40.0, 40.0);
+        let moon = paint_nodes(40.0, 40.0, vec![glyph_node(rect, GlyphKind::Moon)]);
+        assert_eq!(alpha_at(&moon, 8, 28), 255, "lower-left of the disc");
+        assert_eq!(alpha_at(&moon, 30, 30), 255, "lower-right of the disc");
+        assert_eq!(alpha_at(&moon, 30, 12), 0, "bitten away");
+        assert_eq!(alpha_at(&moon, 1, 1), 0, "outside the disc");
+        let clipped = paint_nodes(
+            40.0,
+            40.0,
+            vec![
+                Node::PushClip(Rect::new(0.0, 0.0, 20.0, 40.0)),
+                glyph_node(rect, GlyphKind::Moon),
+                Node::PopClip,
+            ],
+        );
+        assert_eq!(alpha_at(&clipped, 8, 28), 255);
+        assert_eq!(alpha_at(&clipped, 30, 30), 0, "clipped");
+        // No room, no moon.
+        let empty = paint_nodes(
+            40.0,
+            40.0,
+            vec![glyph_node(Rect::new(10.0, 10.0, 0.0, 0.0), GlyphKind::Moon)],
+        );
+        assert_eq!(painted_box(&empty), None);
     }
 }

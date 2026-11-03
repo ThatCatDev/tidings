@@ -345,6 +345,93 @@ mod tests {
         assert!(cache.get(&bad, 32).is_none());
     }
 
+    /// A fresh per-test scratch directory under the system temp dir.
+    fn scratch(test: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("tidings-ui-{}-{test}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    const GREEN_SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="#00ff00"/></svg>"##;
+
+    #[test]
+    fn opaque_png_files_load_as_photos_by_path_or_uri() {
+        let dir = scratch("png");
+        let path = dir.join("red.png");
+        image::RgbImage::from_pixel(6, 3, image::Rgb([255, 0, 0]))
+            .save(&path)
+            .unwrap();
+        let mut cache = ImageCache::default();
+        let shown = path.display().to_string();
+        for img in [
+            Image::Path(path.clone()),
+            Image::IconName(shown.clone()),
+            Image::IconName(format!("file://{shown}")),
+        ] {
+            let r = cache.get(&img, 12);
+            let r = r.as_deref();
+            // No alpha channel: a photo, cropped to fill the whole square.
+            assert_eq!(r.map(|r| r.shape), Some(Shape::Photo), "{img:?}");
+            let corner = r.and_then(|r| r.pixmap.pixel(0, 0));
+            assert!(corner.is_some_and(|p| p.red() == 255 && p.alpha() == 255));
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn svg_files_load_as_inset_icons() {
+        let dir = scratch("svg");
+        let path = dir.join("green.SVG");
+        std::fs::write(&path, GREEN_SVG).unwrap();
+        let mut cache = ImageCache::default();
+        let r = cache.get(&Image::Path(path), 40);
+        let r = r.as_deref();
+        assert_eq!(r.map(|r| r.shape), Some(Shape::Icon));
+        let px = |x, y| r.and_then(|r| r.pixmap.pixel(x, y));
+        assert!(px(20, 20).is_some_and(|p| p.green() == 255));
+        assert!(px(2, 2).is_some_and(|p| p.alpha() == 0), "inset");
+        // An unreadable SVG is a miss, not a panic.
+        assert!(cache.get(&Image::Path(dir.join("gone.svg")), 40).is_none());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn unknown_icon_names_are_none() {
+        for mut cache in [ImageCache::default(), ImageCache::new()] {
+            assert!(
+                cache
+                    .get(&Image::IconName("tidings-no-such-icon-xyz".into()), 32)
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn hits_share_the_cached_raster() {
+        let mut cache = ImageCache::default();
+        let img = rgba(2, 2, [0, 0, 255, 255]);
+        let a = cache.get(&img, 8);
+        let b = cache.get(&img, 8);
+        assert!(matches!((&a, &b), (Some(a), Some(b)) if Arc::ptr_eq(a, b)));
+        // Another size is another raster.
+        let c = cache.get(&img, 16);
+        assert_eq!(c.map(|c| c.pixmap.width()), Some(16));
+        assert_eq!(cache.entries.len(), 2);
+    }
+
+    #[test]
+    fn cache_is_flushed_when_full() {
+        let mut cache = ImageCache::default();
+        for i in 0..=CACHE_LIMIT + 1 {
+            cache.get(&Image::Path(format!("/nonexistent/{i}.png").into()), 8);
+        }
+        assert!(
+            cache.entries.len() <= CACHE_LIMIT,
+            "{}",
+            cache.entries.len()
+        );
+    }
+
     #[test]
     fn svg_renders_inset() {
         let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="#00ff00"/></svg>"##;
