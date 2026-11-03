@@ -5,6 +5,7 @@
 //! dirty and draws immediately if no frame is outstanding, otherwise the
 //! next frame callback picks it up.
 
+mod blur;
 mod canvas;
 mod clipboard;
 mod panel;
@@ -32,6 +33,7 @@ use smithay_client_toolkit::reexports::protocols::wp::fractional_scale::v1::clie
 use smithay_client_toolkit::reexports::protocols::wp::viewporter::client::{
     wp_viewport::WpViewport, wp_viewporter::WpViewporter,
 };
+use smithay_client_toolkit::reexports::protocols::ext::background_effect::v1::client::ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1;
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
 use smithay_client_toolkit::seat::keyboard::{
     KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers,
@@ -61,6 +63,7 @@ use crate::render::Painter;
 use crate::scene::HitTarget;
 use crate::style::{Palette, Style, metrics as m};
 use crate::{Display, UiError};
+use blur::BlurManager;
 use canvas::{Canvas, SurfaceSpec};
 use clipboard::Clipboard;
 use panel::PanelView;
@@ -78,7 +81,8 @@ pub enum SurfaceId {
     Toasts,
 }
 
-/// Layer namespaces. Hyprland layer rules match these to blur behind our
+/// Layer namespaces. Compositors that blur layer surfaces (Hyprland layer
+/// rules, `SwayFX`'s `layer_effects`) match these to blur behind our
 /// surfaces; a theme that turns blur off uses the `-noblur` names, which
 /// the rules do not match.
 fn namespace(blur: bool, blurred: &'static str, plain: &'static str) -> &'static str {
@@ -94,6 +98,7 @@ fn panel_spec(blur: bool) -> SurfaceSpec {
         size: (f32_to_u32_const(panel::SURFACE_WIDTH), 0),
         margin: (m::PANEL_MARGIN_TOP, 0, m::PANEL_MARGIN_BOTTOM, 0),
         keyboard: KeyboardInteractivity::OnDemand,
+        blur,
     }
 }
 
@@ -105,6 +110,7 @@ const CATCHER_SPEC: SurfaceSpec = SurfaceSpec {
     size: (0, 0),
     margin: (0, 0, 0, 0),
     keyboard: KeyboardInteractivity::None,
+    blur: false,
 };
 
 fn toast_spec(height: u32, blur: bool) -> SurfaceSpec {
@@ -117,6 +123,7 @@ fn toast_spec(height: u32, blur: bool) -> SurfaceSpec {
         // The stack's transparent inset sits inside the margin.
         margin: (m::TOAST_MARGIN_TOP - inset_i32(), 0, 0, 0),
         keyboard: KeyboardInteractivity::None,
+        blur,
     }
 }
 
@@ -151,6 +158,8 @@ pub struct App {
     layer_shell: LayerShell,
     fractional: Option<WpFractionalScaleManagerV1>,
     viewporter: Option<WpViewporter>,
+    /// Blur on request (`ext-background-effect-v1`), if the compositor has it.
+    blur: Option<BlurManager>,
     events: Sender<UiEvent>,
     palette: Palette,
     view: ViewModel,
@@ -220,6 +229,14 @@ pub fn setup(
     )?;
     // Second roundtrip: receive the shm format list and seat capabilities.
     queue.roundtrip(&mut app)?;
+    log::info!(
+        "tidings-ui: compositor blur on request: {}",
+        if app.blur.as_ref().is_some_and(|b| b.supported) {
+            "yes"
+        } else {
+            "no"
+        }
+    );
     if app.shm.formats().contains(&wl_shm::Format::Abgr8888) {
         app.shm_format = wl_shm::Format::Abgr8888;
     }
@@ -272,13 +289,19 @@ impl App {
     ) -> Result<Self, UiError> {
         let compositor = CompositorState::bind(globals, qh)
             .map_err(|_| UiError::MissingGlobal("wl_compositor"))?;
-        let layer_shell = LayerShell::bind(globals, qh)
-            .map_err(|_| UiError::MissingGlobal("zwlr_layer_shell_v1"))?;
+        let layer_shell = LayerShell::bind(globals, qh).map_err(|_| UiError::NoLayerShell)?;
         let shm = Shm::bind(globals, qh).map_err(|_| UiError::MissingGlobal("wl_shm"))?;
         let fractional = globals
             .bind::<WpFractionalScaleManagerV1, _, _>(qh, 1..=1, ())
             .ok();
         let viewporter = globals.bind::<WpViewporter, _, _>(qh, 1..=1, ()).ok();
+        let blur = globals
+            .bind::<ExtBackgroundEffectManagerV1, _, _>(qh, 1..=1, ())
+            .ok()
+            .map(|manager| BlurManager {
+                manager,
+                supported: false,
+            });
         if fractional.is_none() || viewporter.is_none() {
             log::warn!("tidings-ui: no fractional-scale/viewporter support; rendering at scale 1");
         }
@@ -293,6 +316,7 @@ impl App {
             layer_shell,
             fractional,
             viewporter,
+            blur,
             events,
             palette: Palette::default(),
             view: ViewModel::default(),
@@ -495,6 +519,10 @@ impl App {
         // The input region is double-buffered: set it before the commit in
         // `present`, or it would only apply with the next frame.
         canvas.set_input(&self.compositor, &[self.panel_view.input_rect(h)]);
+        if self.blur.as_ref().is_some_and(|b| b.supported) {
+            let glass = self.panel_view.glass(h, self.painter.style.panel_radius);
+            canvas.set_blur(&self.compositor, &[glass]);
+        }
         canvas.present(&qh, &frame, &damage)?;
         if self.panel_view.is_animating(now) {
             canvas.dirty = true;
@@ -566,6 +594,9 @@ impl App {
             return Ok(());
         };
         canvas.set_input(&self.compositor, &self.toast_stack.input_rects());
+        if self.blur.as_ref().is_some_and(|b| b.supported) {
+            canvas.set_blur(&self.compositor, &self.toast_stack.glass(now));
+        }
         canvas.present(&qh, &frame, &[])?;
         if animating {
             canvas.dirty = true;

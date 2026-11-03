@@ -5,6 +5,7 @@
 
 pub mod app;
 pub mod clock;
+pub mod colors;
 pub mod config_file;
 pub mod daemon;
 pub mod dbus;

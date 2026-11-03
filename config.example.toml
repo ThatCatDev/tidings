@@ -41,8 +41,10 @@ speed = 1.0
 # See `tidings theme list`.
 # name = "glass"
 #
-# Colours file written by the Noctalia hook. Default:
-# ~/.config/tidings/colors.json ($TIDINGS_COLORS still wins).
+# Where the colours come from (see README.md, "Colours"): a colours file,
+# or "noctalia" for the Noctalia shell's palette. Unset, tidings uses
+# ~/.config/tidings/colors.json if it exists, else Noctalia's palette if
+# Noctalia is installed, else its own colours. $TIDINGS_COLORS wins over this.
 # colors = "~/.config/tidings/colors.json"
 
 # Any theme setting can be changed here too, in sections named after the

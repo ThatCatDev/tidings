@@ -87,8 +87,15 @@ impl App {
             surface,
             focused,
         });
-        if !focused && let Some(c) = self.canvas_mut(surface) {
+        if focused {
+            log::trace!("tidings-ui: reply field has the keyboard");
+        } else if let Some(c) = self.canvas_mut(surface) {
             c.set_keyboard(Some(KeyboardInteractivity::Exclusive));
+            // Ask now rather than at the end of this turn of the loop, so the
+            // keyboard moves before the user (or a test) starts typing.
+            if let Err(e) = self.conn.flush() {
+                log::debug!("tidings-ui: flush failed: {e}");
+            }
         }
         self.reply_changed();
     }
@@ -174,6 +181,9 @@ impl App {
             return;
         }
         open.focused = focused;
+        if focused {
+            log::trace!("tidings-ui: reply field has the keyboard");
+        }
         if focused && let Some(c) = self.canvas_mut(surface) {
             // Got it: let a click elsewhere take it away again.
             c.set_keyboard(Some(KeyboardInteractivity::OnDemand));

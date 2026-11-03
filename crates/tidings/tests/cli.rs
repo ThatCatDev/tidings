@@ -259,4 +259,38 @@ async fn daemon_uses_the_configured_theme_and_colours() {
         "{err}"
     );
     assert!(err.contains("theme: nord"), "{err}");
+    assert!(
+        err.contains(&format!(
+            "colours: {}",
+            home.path().join("my-colors.json").display()
+        )),
+        "{err}"
+    );
+}
+
+#[tokio::test]
+async fn daemon_follows_noctalia_without_a_colours_file() {
+    let bus = common::PrivateBus::start();
+    let home = tempfile::tempdir().unwrap();
+    let runtime_dir = tempfile::tempdir().unwrap();
+    let palette = home.path().join(".config/hypr/noctalia.lua");
+    std::fs::create_dir_all(palette.parent().unwrap()).unwrap();
+    std::fs::write(&palette, include_str!("fixtures/noctalia.lua")).unwrap();
+
+    let mut cmd = common::tidings_cmd(home.path());
+    cmd.args(["daemon", "--no-gestures"])
+        .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
+        .env("XDG_RUNTIME_DIR", runtime_dir.path())
+        .env("TIDINGS_LOG", "info");
+    let out = tokio::task::spawn_blocking(move || cmd.output().unwrap())
+        .await
+        .unwrap();
+    let err = stderr(&out);
+    assert!(
+        err.contains(&format!(
+            "colours: Noctalia's palette ({})",
+            palette.display()
+        )),
+        "{err}"
+    );
 }

@@ -1,7 +1,8 @@
 //! CONTRACT: colour theme.
 //!
-//! Loaded from `~/.config/tidings/colors.json` (written by the Noctalia hook
-//! script). Keys are camelCase versions of the fields; colours are `#rrggbb`.
+//! Loaded from `~/.config/tidings/colors.json`, which a palette tool (or the
+//! Noctalia script in contrib/) writes. Keys are camelCase versions of the
+//! fields; colours are `#rrggbb`.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Rgb(pub u8, pub u8, pub u8);

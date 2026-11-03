@@ -23,3 +23,7 @@ tiny-skia = "0.12.0"
 env_logger = "0.11.11"
 # The end-to-end tests run sway in a temporary runtime directory.
 tempfile = "3"
+# A minimal fake compositor (tests/fake), for protocols sway lacks.
+wayland-server = "0.31"
+wayland-protocols = { version = "0.32", features = ["server", "staging"] }
+wayland-protocols-wlr = { version = "0.3", features = ["server"] }

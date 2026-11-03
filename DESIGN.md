@@ -1,13 +1,13 @@
 # tidings: design
 
-A macOS-style Notification Centre for Hyprland, written in Rust as one binary.
+A macOS-style Notification Centre for Wayland compositors with layer-shell (Hyprland, niri, sway, KDE Plasma, ...), written in Rust as one binary. Nothing in it depends on a particular compositor or shell; integrations (blur on request, Noctalia colours) are used when present.
 
 - **Notification daemon:** owns `org.freedesktop.Notifications`, replacing swaync/mako/dunst.
 - **Toasts:** popups at the top-right.
 - **Panel:** a full-height glass panel on the right edge.
 - **Gesture:** a **two-finger swipe from the right edge of the trackpad** pulls the panel out, and the panel **follows the fingers** like macOS. Releasing past halfway, or with a flick, opens it; otherwise it springs back. A two-finger swipe right while it is open closes it the same way.
 
-Target machine: MacBookPro16,2 (T2), CachyOS, Hyprland 0.57, single display eDP-1 2560x1600 at fractional scale 1.6. Rust 1.99, edition 2024.
+Developed on: MacBookPro16,2 (T2), CachyOS, Hyprland 0.57, single display eDP-1 2560x1600 at fractional scale 1.6. Rust 1.99, edition 2024.
 
 ## Architecture
 
@@ -66,7 +66,7 @@ Dependency direction: `tidings -> {core, gesture, ui}`, `gesture -> core`, `ui -
 - Compact pill: 58 logical px tall (radius 29), round 40 px icon, a bold one-line summary over one line of body, then the time and a round 28 px expand (⌄) button (with a dot when the notification has actions). Hover tints the glass and shows a "×" over the icon.
 - Expanded: the full card (app name + time, summary, body up to 6 lines, action buttons) with the icon level with the app-name row and a collapse (⌃) button in the top-right corner. The stack re-flows when a toast grows or shrinks. The UI sends `SetToastExpanded`.
 - Expiry: low 4 s, normal 6 s, critical never (all configurable). A positive client timeout wins; 0 means never. Hover or expansion pauses expiry; it resumes with the remaining time once the toast is neither. A replaced notification keeps its expanded state. Expired toasts stay in the panel history (unless `transient`).
-- Glass: far more transparent than the panel (alpha 0.46 at rest), with a 1 px light rim and a soft shadow whose alpha stays below 0.3, so a Hyprland `ignore_alpha` of 0.4 blurs the glass but not the shadow.
+- Glass: far more transparent than the panel (alpha 0.46 at rest), with a 1 px light rim and a soft shadow whose alpha stays below 0.3, so a compositor rule with an alpha threshold (Hyprland's `ignore_alpha` 0.4) blurs the glass but not the shadow.
 - Click on the body → `default` action (if any), then dismiss. Close button and action buttons.
 - Do Not Disturb suppresses toasts, except critical ones.
 
@@ -118,11 +118,11 @@ Dependency direction: `tidings -> {core, gesture, ui}`, `gesture -> core`, `ui -
 - Layering: `Look::default()` (the glass theme; a test pins `themes/glass.toml` to it) ← the chosen theme's patch ← the config's patch. A missing or invalid theme is logged and glass used, keeping the config's overrides.
 - `tidings_core::look::Look` is pure data. The UI turns it into a `tidings_ui::style::Style` once at startup: radii, `Fill`s (still colour `Role`s, so a colours change is only a repaint), `Stroke`s with widths, the shadow and the type scale. Layout takes `&Style`; text measuring goes through `TextMeasure::line_height`, so the engine and layout agree on spacing.
 - The look's `[palette]` and panel opacity are applied to every `colors.json` theme by the App actor (`Look::apply_to`) before it reaches the UI.
-- Blur is the compositor's: `blur = false` gives the surfaces `-noblur` layer namespaces, which the Hyprland rules don't match.
+- Blur is the compositor's. With `blur = true` each surface asks for it through `ext-background-effect-v1` when the compositor offers it (Hyprland, niri 26.04+), with a region that follows the rounded glass (row-by-row rects at the corners), set before each commit like the input region. Compositors without the protocol can blur by rule on the layer namespaces; `blur = false` gives the surfaces `-noblur` namespaces, which such rules don't match.
 
 ### Theme
-- `~/.config/tidings/colors.json` (override: `TIDINGS_COLORS`), watched for changes (inotify via `notify` crate or polling mtime ~1 s). Invalid or missing file → built-in dark defaults.
-- `scripts/noctalia-colors.sh` (POSIX shell, no python/node) converts Noctalia's `~/.config/hypr/noctalia.lua` + `noctalia msg theme-mode-get` into colors.json.
+- Colour sources (`tidings::colors::ColorSource`): `TIDINGS_COLORS` or `theme.colors` (a file, or `"noctalia"`) if set; else `~/.config/tidings/colors.json` if it exists; else Noctalia's generated palette (`hypr/noctalia.lua` in the config home) if it exists; else `colors.json`, watched so creating it takes effect. Polled (mtime and size) every second; changes recolour live. Invalid or missing → built-in dark defaults.
+- Noctalia's palette gives the accent (`local primary = "rgb(...)"`); the mode comes from its `surface` luminance; surfaces stay tidings' own for the mode, so a wallpaper-derived surface can't make the glass illegible.
 
 ## Tests
 

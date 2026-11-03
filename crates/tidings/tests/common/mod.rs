@@ -16,6 +16,7 @@ use std::sync::mpsc as std_mpsc;
 use std::time::Duration;
 
 use tempfile::TempDir;
+use tidings::colors::ColorSource;
 use tidings::daemon::{Bus, Daemon, DaemonConfig, DaemonError};
 use tidings::ipc::client;
 use tidings::ipc::proto::{Request, Response};
@@ -147,7 +148,7 @@ pub struct TestDaemon {
 pub fn config(bus: &PrivateBus, dir: &Path) -> DaemonConfig {
     let mut config = DaemonConfig::new(dir.join("tidings.sock"));
     config.bus = Bus::Address(bus.address.clone());
-    config.colors_path = Some(dir.join("colors.json"));
+    config.colors = Some(ColorSource::File(dir.join("colors.json")));
     config.theme_poll = Duration::from_millis(20);
     config.settings.gestures.enabled = false;
     // Even with gestures on, never look at the machine's real input devices.

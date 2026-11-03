@@ -19,6 +19,7 @@ use zbus::fdo::{RequestNameFlags, RequestNameReply};
 use zbus::{Connection, connection};
 
 use crate::app::{App, AppDeps, AppEvent, AppSender, PanelStateSink};
+use crate::colors::ColorSource;
 use crate::dbus::server::{BUS_NAME, DbusSignals, NotificationServer, OBJECT_PATH};
 use crate::ipc::server::{BindError, IpcServer};
 use crate::theme_watch::{POLL_INTERVAL, ThemeWatcher};
@@ -39,9 +40,10 @@ pub struct DaemonConfig {
     pub bus: Bus,
     /// IPC socket location.
     pub socket_path: PathBuf,
-    /// `None` uses the built-in colours and watches nothing.
-    pub colors_path: Option<PathBuf>,
-    /// How often the colours file is polled.
+    /// Where the colours come from; `None` uses the built-in colours and
+    /// watches nothing.
+    pub colors: Option<ColorSource>,
+    /// How often the colours source is polled.
     pub theme_poll: Duration,
     /// The user's settings (`config.toml`).
     pub settings: Config,
@@ -59,7 +61,7 @@ impl DaemonConfig {
         Self {
             bus: Bus::Session,
             socket_path,
-            colors_path: None,
+            colors: None,
             theme_poll: POLL_INTERVAL,
             settings: Config::default(),
             look: Look::default(),
@@ -179,9 +181,9 @@ impl Daemon {
         };
 
         let mut background = Vec::new();
-        let theme = match config.colors_path {
-            Some(path) => {
-                let (theme, watcher) = ThemeWatcher::load(path);
+        let theme = match config.colors {
+            Some(source) => {
+                let (theme, watcher) = ThemeWatcher::load(source);
                 background.push(tokio::spawn(watcher.run(config.theme_poll, events.clone())));
                 theme
             }

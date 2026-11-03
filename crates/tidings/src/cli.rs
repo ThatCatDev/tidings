@@ -4,7 +4,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use tidings::ipc::proto::{DndChange, Request};
 use tidings_core::gesture::{GestureEvent, GestureKind};
 
-/// macOS-style Notification Centre for Hyprland.
+/// macOS-style Notification Centre for Wayland.
 #[derive(Debug, Parser)]
 #[command(name = "tidings", version, about)]
 pub struct Cli {

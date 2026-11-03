@@ -176,6 +176,16 @@ impl PanelView {
         )
     }
 
+    /// The sheet's glass, where it is now, for the compositor to blur
+    /// behind (`radius` is the theme's panel corner radius).
+    #[must_use]
+    pub fn glass(&self, surface_h: f32, radius: f32) -> super::blur::Glass {
+        super::blur::Glass {
+            rect: Rect::new(self.offset(), 0.0, m::PANEL_WIDTH, surface_h),
+            radius,
+        }
+    }
+
     /// Hit-tests a surface-local point.
     #[must_use]
     pub fn hit(&self, p: Point) -> Option<HitTarget> {

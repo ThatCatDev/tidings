@@ -190,11 +190,8 @@ fn replying_from_a_toast() {
     s.click_toast(&t, &HitTarget::StartReply(ID));
     s.settle();
     s.keys(&["later"]);
-    s.ui.send(UiUpdate::Panel(PanelCommand::AnimateTo(1.0)));
-    s.expect(|e| *e == UiEvent::PanelSettled { open: true });
-    s.ui.send(UiUpdate::Panel(PanelCommand::AnimateTo(0.0)));
-    s.expect(|e| *e == UiEvent::PanelSettled { open: false });
-    s.settle();
+    s.open_panel();
+    s.close_panel();
     s.click_toast(&t, &HitTarget::StartReply(ID));
     s.settle();
     s.key("Return");
@@ -222,8 +219,7 @@ fn panel_opens_works_and_closes() {
     // Finger tracking, then a spring open.
     s.ui.send(UiUpdate::Panel(PanelCommand::Track(0.3)));
     s.settle();
-    s.ui.send(UiUpdate::Panel(PanelCommand::AnimateTo(1.0)));
-    s.expect(|e| *e == UiEvent::PanelSettled { open: true });
+    s.open_panel();
 
     s.click_panel(&view, &HitTarget::ToggleDnd);
     s.expect(|e| *e == UiEvent::ToggleDnd);
@@ -329,8 +325,7 @@ fn replying_to_another_card_moves_the_field() {
     view.groups[0].cards.push(card(other.0, true));
     view.groups[0].expanded = true;
     s.view(view.clone());
-    s.ui.send(UiUpdate::Panel(PanelCommand::AnimateTo(1.0)));
-    s.expect(|e| *e == UiEvent::PanelSettled { open: true });
+    s.open_panel();
 
     s.click_panel(&view, &HitTarget::StartReply(ID));
     s.settle();
@@ -370,8 +365,7 @@ fn outputs_and_devices_come_and_go() {
 
     // The panel's monitor going away closes the panel.
     sway.sway("focus output HEADLESS-1");
-    s.ui.send(UiUpdate::Panel(PanelCommand::AnimateTo(1.0)));
-    s.expect(|e| *e == UiEvent::PanelSettled { open: true });
+    s.open_panel();
     sway.sway("output HEADLESS-1 unplug");
     s.expect(|e| *e == UiEvent::RequestClose);
 
