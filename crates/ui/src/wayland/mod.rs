@@ -6,13 +6,17 @@
 //! next frame callback picks it up.
 
 mod canvas;
+mod clipboard;
 mod panel;
+mod reply;
 mod toasts;
 
 use std::sync::mpsc::Sender;
 use std::time::Instant;
 
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
+use smithay_client_toolkit::data_device_manager::DataDeviceManagerState;
+use smithay_client_toolkit::data_device_manager::data_device::DataDevice;
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
 use smithay_client_toolkit::reexports::calloop::channel::{self, Channel};
 use smithay_client_toolkit::reexports::calloop::{EventLoop, LoopHandle};
@@ -44,8 +48,8 @@ use smithay_client_toolkit::shell::wlr_layer::{
 };
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use smithay_client_toolkit::{
-    delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
-    delegate_registry, delegate_seat, delegate_shm, registry_handlers,
+    delegate_compositor, delegate_data_device, delegate_keyboard, delegate_layer, delegate_output,
+    delegate_pointer, delegate_registry, delegate_seat, delegate_shm, registry_handlers,
 };
 use tidings_core::model::NotificationId;
 use tidings_core::ui::{PanelCommand, UiEvent, UiUpdate};
@@ -53,12 +57,14 @@ use tidings_core::view::ViewModel;
 
 use crate::UiError;
 use crate::anim::Timing;
+use crate::compose::Mods;
 use crate::geom::{Point, f32_to_u32, u32_to_f32};
 use crate::render::Painter;
 use crate::scene::HitTarget;
 use crate::style::{Palette, Style, metrics as m};
 use canvas::{Canvas, SurfaceSpec};
 use panel::PanelView;
+use reply::Replies;
 use toasts::ToastStack;
 
 /// `BTN_LEFT` from linux/input-event-codes.h.
@@ -156,6 +162,15 @@ pub struct App {
     toasts: Option<Canvas>,
     pointer: Option<ThemedPointer>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
+    /// Modifiers held, for the reply field's shortcuts.
+    mods: Mods,
+    /// The inline reply field and its drafts.
+    replies: Replies,
+    /// Clipboard access, for pasting into the reply field.
+    data_manager: Option<DataDeviceManagerState>,
+    data_device: Option<DataDevice>,
+    /// For key repeat timers and clipboard reads.
+    loop_handle: LoopHandle<'static, App>,
     /// Surface and position under the pointer.
     pointer_at: Option<(SurfaceId, Point)>,
     /// Press target, for click = press + release on the same target.
@@ -186,14 +201,24 @@ pub fn setup(
     let conn = Connection::connect_to_env()?;
     let (globals, mut queue) = registry_queue_init::<App>(&conn)?;
     let qh = queue.handle();
-    let mut app = App::new(conn.clone(), &globals, &qh, events, timing, style)?;
+    // The loop comes first: the keyboard (bound during the roundtrip below)
+    // repeats keys on its timers.
+    let event_loop: EventLoop<App> =
+        EventLoop::try_new().map_err(|e| UiError::EventLoop(e.to_string()))?;
+    let mut app = App::new(
+        conn.clone(),
+        &globals,
+        &qh,
+        event_loop.handle(),
+        events,
+        timing,
+        style,
+    )?;
     // Second roundtrip: receive the shm format list and seat capabilities.
     queue.roundtrip(&mut app)?;
     if app.shm.formats().contains(&wl_shm::Format::Abgr8888) {
         app.shm_format = wl_shm::Format::Abgr8888;
     }
-    let event_loop: EventLoop<App> =
-        EventLoop::try_new().map_err(|e| UiError::EventLoop(e.to_string()))?;
     WaylandSource::new(conn.clone(), queue)
         .insert(event_loop.handle())
         .map_err(|e| UiError::EventLoop(e.to_string()))?;
@@ -236,6 +261,7 @@ impl App {
         conn: Connection,
         globals: &GlobalList,
         qh: &QueueHandle<Self>,
+        loop_handle: LoopHandle<'static, Self>,
         events: Sender<UiEvent>,
         timing: Timing,
         style: Style,
@@ -274,6 +300,11 @@ impl App {
             toasts: None,
             pointer: None,
             keyboard: None,
+            mods: Mods::default(),
+            replies: Replies::default(),
+            data_manager: DataDeviceManagerState::bind(globals, qh).ok(),
+            data_device: None,
+            loop_handle,
             pointer_at: None,
             pressed: None,
             cursor: None,
@@ -295,6 +326,7 @@ impl App {
         match update {
             UiUpdate::View(view) => {
                 self.view = *view;
+                self.prune_replies();
                 self.panel_view.needs_layout = true;
                 self.sync_toasts(now);
                 self.schedule(SurfaceId::Panel);
@@ -354,10 +386,12 @@ impl App {
             }
         }
         // Toasts hide while the panel is out.
+        self.close_reply_on(SurfaceId::Toasts);
         self.toasts = None;
     }
 
     fn unmap_panel(&mut self) {
+        self.close_reply_on(SurfaceId::Panel);
         self.panel = None;
         self.catcher = None;
         self.panel_view.reset_surface_state();
@@ -544,11 +578,11 @@ impl App {
     /// Updates hover state for a pointer at `p` on surface `id`.
     fn hover(&mut self, id: SurfaceId, p: Option<Point>) {
         let now = Instant::now();
-        let mut clickable = false;
+        let mut under: Option<HitTarget> = None;
         match id {
             SurfaceId::Panel => {
                 let target = p.and_then(|p| self.panel_view.hit(p));
-                clickable = target.as_ref().is_some_and(HitTarget::is_clickable);
+                under.clone_from(&target);
                 if self.panel_view.ui.hovered != target {
                     self.panel_view.ui.hovered = target;
                     self.panel_view.needs_layout = true;
@@ -557,7 +591,7 @@ impl App {
             }
             SurfaceId::Toasts => {
                 let hit = p.and_then(|p| self.toast_stack.hit(p));
-                clickable = hit.as_ref().is_some_and(|(_, t)| t.is_clickable());
+                under = hit.as_ref().map(|(_, t)| t.clone());
                 let before = self.toast_stack.hovered.as_ref().map(|(id, _)| *id);
                 let after = hit.as_ref().map(|(id, _)| *id);
                 let scale = self.toast_scale();
@@ -574,10 +608,10 @@ impl App {
             SurfaceId::Catcher => {}
         }
         if p.is_some() {
-            self.set_cursor(if clickable {
-                CursorIcon::Pointer
-            } else {
-                CursorIcon::Default
+            self.set_cursor(match under {
+                Some(t) if t.is_text() => CursorIcon::Text,
+                Some(t) if t.is_clickable() => CursorIcon::Pointer,
+                _ => CursorIcon::Default,
             });
         }
     }
@@ -642,9 +676,12 @@ impl App {
                     return;
                 }
                 let now_target = self.target_at(id, p);
-                if let Some(t) = target.filter(|t| Some(t) == now_target.as_ref())
-                    && let Some(ev) = t.click_event()
-                {
+                let Some(t) = target.filter(|t| Some(t) == now_target.as_ref()) else {
+                    return;
+                };
+                if let Some(click) = t.reply_click() {
+                    self.reply_click(id, click);
+                } else if let Some(ev) = t.click_event() {
                     self.emit(ev);
                 }
             }
@@ -813,9 +850,23 @@ impl SeatHandler for App {
             }
         }
         if cap == Capability::Keyboard && self.keyboard.is_none() {
-            match self.seat.get_keyboard(qh, &seat, None) {
+            // Held keys repeat in the reply field, on the loop's timers.
+            let keyboard = self.seat.get_keyboard_with_repeat(
+                qh,
+                &seat,
+                None,
+                self.loop_handle.clone(),
+                Box::new(|app: &mut Self, _, event| app.key(&event)),
+            );
+            match keyboard {
                 Ok(k) => self.keyboard = Some(k),
                 Err(e) => log::warn!("tidings-ui: no keyboard: {e}"),
+            }
+            if self.data_device.is_none() {
+                self.data_device = self
+                    .data_manager
+                    .as_ref()
+                    .map(|m| m.get_data_device(qh, &seat));
             }
         }
     }
@@ -858,17 +909,32 @@ impl PointerHandler for App {
     }
 }
 
+impl App {
+    /// A key press, or a repeat of a held one.
+    fn key(&mut self, event: &KeyEvent) {
+        if self.reply_key(event) {
+            return;
+        }
+        if event.keysym == Keysym::Escape && self.panel.is_some() {
+            self.emit(UiEvent::RequestClose);
+        }
+    }
+}
+
 impl KeyboardHandler for App {
     fn enter(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
-        _: &wl_surface::WlSurface,
+        surface: &wl_surface::WlSurface,
         _: u32,
         _: &[u32],
         _: &[Keysym],
     ) {
+        if let Some(id) = self.id_of(surface) {
+            self.reply_focus(id, true);
+        }
     }
 
     fn leave(
@@ -876,9 +942,12 @@ impl KeyboardHandler for App {
         _: &Connection,
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
-        _: &wl_surface::WlSurface,
+        surface: &wl_surface::WlSurface,
         _: u32,
     ) {
+        if let Some(id) = self.id_of(surface) {
+            self.reply_focus(id, false);
+        }
     }
 
     fn press_key(
@@ -889,9 +958,7 @@ impl KeyboardHandler for App {
         _: u32,
         event: KeyEvent,
     ) {
-        if event.keysym == Keysym::Escape && self.panel.is_some() {
-            self.emit(UiEvent::RequestClose);
-        }
+        self.key(&event);
     }
 
     fn release_key(
@@ -910,8 +977,10 @@ impl KeyboardHandler for App {
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
         _: u32,
-        _: KeyEvent,
+        event: KeyEvent,
     ) {
+        // Compositors on wl_keyboard v10 send repeats themselves.
+        self.key(&event);
     }
 
     fn update_modifiers(
@@ -920,10 +989,15 @@ impl KeyboardHandler for App {
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
         _: u32,
-        _: Modifiers,
+        modifiers: Modifiers,
         _: RawModifiers,
         _: u32,
     ) {
+        self.mods = Mods {
+            ctrl: modifiers.ctrl,
+            alt: modifiers.alt,
+            shift: modifiers.shift,
+        };
     }
 }
 
@@ -1011,3 +1085,4 @@ delegate_keyboard!(App);
 delegate_pointer!(App);
 delegate_layer!(App);
 delegate_registry!(App);
+delegate_data_device!(App);

@@ -36,6 +36,21 @@ pub struct Action {
     pub label: String,
 }
 
+/// An inline reply the client offers: the `inline-reply` action of the KDE
+/// notification extension, which Chrome (for web notifications), Telegram
+/// and others send when the server advertises the `inline-reply` capability.
+/// The typed text goes back in the `NotificationReplied(id, text)` signal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reply {
+    /// Label of the button that starts a reply ("Reply" if the client sent
+    /// none).
+    pub label: String,
+    /// `x-kde-reply-placeholder-text`: grey text in the empty field.
+    pub placeholder: Option<String>,
+    /// `x-kde-reply-submit-button-text`: the send button's label.
+    pub submit: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Notification {
     pub id: NotificationId,
@@ -50,6 +65,11 @@ pub struct Notification {
     pub actions: Vec<Action>,
     /// Whether the client registered a "default" action.
     pub has_default_action: bool,
+    /// The inline reply the client offers, if any.
+    pub reply: Option<Reply>,
+    /// `x-kde-origin-name`: where the notification comes from, such as the
+    /// website for a browser's web notification.
+    pub origin: Option<String>,
     pub urgency: Urgency,
     /// Client-requested timeout: `None` = server decides, `Some(0)` = never.
     pub expire_timeout_ms: Option<u32>,

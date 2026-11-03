@@ -10,6 +10,7 @@
 use tidings_core::model::{NotificationId, Urgency};
 use tidings_core::view::{CardView, ToastView};
 
+use crate::compose::ReplyDraft;
 use crate::geom::{Point, Rect, Size, snap};
 use crate::scene::{Align, GlyphKind, HitTarget, Node, Scene};
 use crate::style::{Fill, Role, Style, TextStyle, fills, metrics as m};
@@ -30,11 +31,13 @@ pub struct ToastLayout {
     pub card: Rect,
 }
 
-/// Lays out one toast. `hovered` is the target under the pointer, if any.
+/// Lays out one toast. `hovered` is the target under the pointer, if any;
+/// `draft` the reply being typed, which shows on an expanded toast.
 pub fn layout_toast(
     toast: &ToastView,
     scale: f32,
     hovered: Option<&HitTarget>,
+    draft: Option<&ReplyDraft>,
     style: &Style,
     meas: &mut dyn TextMeasure,
 ) -> ToastLayout {
@@ -44,8 +47,8 @@ pub fn layout_toast(
     let origin = Point::new(inset, inset);
     let (height, shape) = if toast.expanded {
         let spec = expanded_spec();
-        let lay = measure_card_with(c, spec, scale, meas);
-        (lay.height, Shape::Expanded(lay))
+        let lay = measure_card_with(c, spec, draft, scale, meas);
+        (lay.height, Shape::Expanded(Box::new(lay)))
     } else {
         let lay = measure_compact(c, scale, meas);
         (m::TOAST_HEIGHT, Shape::Compact(lay))
@@ -82,7 +85,7 @@ pub fn layout_toast(
                 &ChevronSpec {
                     kind: GlyphKind::ChevronDown,
                     target: HitTarget::ExpandToast(c.id),
-                    dot: !c.actions.is_empty(),
+                    dot: !c.actions.is_empty() || c.reply.is_some(),
                 },
                 hovered,
                 clip,
@@ -157,7 +160,7 @@ pub fn stack_offsets(heights: &[f32]) -> Vec<f32> {
 #[derive(Debug, Clone)]
 enum Shape {
     Compact(CompactLayout),
-    Expanded(super::card::CardLayout),
+    Expanded(Box<super::card::CardLayout>),
 }
 
 /// A measured collapsed toast, positioned relative to its top-left corner.
@@ -383,7 +386,7 @@ mod tests {
     }
 
     fn lay(t: &ToastView, hovered: Option<&HitTarget>) -> ToastLayout {
-        layout_toast(t, 1.0, hovered, &Style::default(), &mut MonoMeasure)
+        layout_toast(t, 1.0, hovered, None, &Style::default(), &mut MonoMeasure)
     }
 
     fn hovered() -> HitTarget {
@@ -579,7 +582,7 @@ mod tests {
         let mut c = sample_card(9, "Mail");
         c.body = "word ".repeat(200);
         let t = lay(&toast(c.clone(), true), None);
-        let card = measure_card_with(&c, expanded_spec(), 1.0, &mut MonoMeasure);
+        let card = measure_card_with(&c, expanded_spec(), None, 1.0, &mut MonoMeasure);
         assert!((t.card.h - card.height).abs() < f32::EPSILON);
         assert!(t.card.h > 58.0);
         assert_eq!(

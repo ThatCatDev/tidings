@@ -3,7 +3,7 @@
 //! The UI never sees the store; it renders exactly what is in a `ViewModel`.
 //! Strings are pre-formatted (relative times etc.) so the UI has no policy.
 
-use crate::model::{Action, Image, NotificationId, Urgency};
+use crate::model::{Action, Image, NotificationId, Reply, Urgency};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CardView {
@@ -16,6 +16,12 @@ pub struct CardView {
     /// "now", "5m", "2h", "Yesterday", "Mon", "3 Nov".
     pub time_label: String,
     pub actions: Vec<Action>,
+    /// The inline reply the client offers, shown as a "Reply" button that
+    /// opens a text field.
+    pub reply: Option<Reply>,
+    /// Where the notification comes from (a website, say), shown after the
+    /// app name.
+    pub origin: Option<String>,
     pub clickable: bool,
     pub urgency: Urgency,
 }

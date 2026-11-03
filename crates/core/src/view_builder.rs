@@ -68,6 +68,8 @@ pub fn card(n: &Notification, clock: &dyn Clock) -> CardView {
         body: n.body.clone(),
         time_label: time_label(n.received_at, clock),
         actions: n.actions.clone(),
+        reply: n.reply.clone(),
+        origin: n.origin.clone(),
         clickable: n.has_default_action,
         urgency: n.urgency,
     }

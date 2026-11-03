@@ -310,6 +310,8 @@ pub(crate) mod tests {
             body: String::new(),
             actions: Vec::new(),
             has_default_action: false,
+            reply: None,
+            origin: None,
             urgency: Urgency::Normal,
             expire_timeout_ms: None,
             desktop_entry: entry.map(str::to_owned),

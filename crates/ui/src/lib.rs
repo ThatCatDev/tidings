@@ -14,6 +14,7 @@
 //! - `wayland` (private): layer surfaces, fractional scaling, input routing.
 
 pub mod anim;
+pub mod compose;
 mod error;
 pub mod geom;
 pub mod layout;

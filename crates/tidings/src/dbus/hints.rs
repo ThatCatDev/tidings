@@ -26,6 +26,12 @@ pub struct Hints {
     pub transient: bool,
     /// `resident`: not removed when an action is invoked.
     pub resident: bool,
+    /// `x-kde-reply-placeholder-text`: the empty reply field's grey text.
+    pub reply_placeholder: Option<String>,
+    /// `x-kde-reply-submit-button-text`: the reply send button's label.
+    pub reply_submit: Option<String>,
+    /// `x-kde-origin-name`: the notification's source, such as a website.
+    pub origin: Option<String>,
 }
 
 /// Parses the hints dictionary. Unknown or malformed hints are ignored.
@@ -56,6 +62,9 @@ pub fn parse_hints<S: BuildHasher>(hints: &HashMap<String, OwnedVariant, S>) -> 
             .filter(|s| !s.is_empty()),
         transient: get("transient").is_some_and(as_bool),
         resident: get("resident").is_some_and(as_bool),
+        reply_placeholder: text(get("x-kde-reply-placeholder-text")),
+        reply_submit: text(get("x-kde-reply-submit-button-text")),
+        origin: text(get("x-kde-origin-name")),
     }
 }
 
@@ -102,6 +111,14 @@ fn unwrap_variant<'a>(v: &'a Variant<'a>) -> &'a Variant<'a> {
         Variant::Variant(inner) => unwrap_variant(inner),
         other => other,
     }
+}
+
+/// A string hint, trimmed; `None` if absent, not a string, or blank.
+fn text(v: Option<&Variant<'_>>) -> Option<String> {
+    v.and_then(as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
 }
 
 fn as_str<'a>(v: &'a Variant<'_>) -> Option<&'a str> {

@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime};
 use tidings_core::clock::FakeClock;
 use tidings_core::gesture::GestureKind;
 use tidings_core::look::{ColorOverrides, Look};
-use tidings_core::model::{Action, Urgency};
+use tidings_core::model::{Action, Reply, Urgency};
 use tidings_core::theme::Rgb;
 
 use super::*;
@@ -15,6 +15,7 @@ use super::*;
 enum Sig {
     Action(u32, String),
     Closed(u32, CloseReason),
+    Replied(u32, String),
 }
 
 #[derive(Clone, Default)]
@@ -40,6 +41,13 @@ impl SignalSink for Rec {
 
     fn notification_closed(&self, id: NotificationId, reason: CloseReason) {
         self.signals.lock().unwrap().push(Sig::Closed(id.0, reason));
+    }
+
+    fn notification_replied(&self, id: NotificationId, text: &str) {
+        self.signals
+            .lock()
+            .unwrap()
+            .push(Sig::Replied(id.0, text.to_owned()));
     }
 }
 
@@ -163,6 +171,8 @@ fn notif(app: &str) -> Notification {
         body: String::new(),
         actions: Vec::new(),
         has_default_action: false,
+        reply: None,
+        origin: None,
         urgency: Urgency::Normal,
         expire_timeout_ms: None,
         desktop_entry: None,
@@ -707,4 +717,52 @@ async fn run_loop_expires_toasts_on_its_own_timer() {
     );
     drop(tx);
     actor.await.unwrap();
+}
+
+fn replyable() -> Notification {
+    with(|n| {
+        n.reply = Some(Reply {
+            label: "Reply".into(),
+            placeholder: None,
+            submit: None,
+        });
+    })
+}
+
+#[test]
+fn replies_are_signalled_then_dismiss() {
+    let mut h = Harness::new();
+    let id = h.notify(replyable());
+    let plain = h.notify(notif("b"));
+    let reply = |id, text: &str| UiEvent::Reply {
+        id: NotificationId(id),
+        text: text.into(),
+    };
+    // Blank text, or a notification with no reply, is ignored.
+    h.ui(reply(id, "  "));
+    h.ui(reply(plain, "hi"));
+    h.ui(reply(999, "hi"));
+    assert_eq!(h.signals(), []);
+    h.ui(reply(id, "on my way"));
+    assert_eq!(
+        h.signals(),
+        [
+            Sig::Replied(id, "on my way".into()),
+            Sig::Closed(id, CloseReason::Dismissed),
+        ]
+    );
+    assert_eq!(h.value(Request::Count), "1");
+}
+
+#[test]
+fn replying_to_a_resident_notification_keeps_it() {
+    let mut h = Harness::new();
+    let id = h.notify_with(replyable(), 0, true);
+    h.ui(UiEvent::Reply {
+        id: NotificationId(id),
+        text: "ok".into(),
+    });
+    assert_eq!(h.signals(), [Sig::Replied(id, "ok".into())]);
+    assert_eq!(h.value(Request::Count), "1");
+    assert_eq!(h.toast_ids(), Vec::<u32>::new());
 }

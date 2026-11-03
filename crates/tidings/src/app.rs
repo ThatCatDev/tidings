@@ -73,6 +73,8 @@ pub trait SignalSink: Send {
     fn action_invoked(&self, id: NotificationId, key: &str);
     /// `NotificationClosed(id, reason)`.
     fn notification_closed(&self, id: NotificationId, reason: CloseReason);
+    /// `NotificationReplied(id, text)` (KDE's inline-reply extension).
+    fn notification_replied(&self, id: NotificationId, text: &str);
 }
 
 /// Receives the panel's open state (the gesture recogniser needs it).
@@ -291,13 +293,36 @@ impl App {
         self.dirty = true;
     }
 
+    /// Sends `text` as the reply to `id`, then treats it like an action:
+    /// the notification goes unless it is resident. Ignored if the
+    /// notification offers no reply or the text is blank.
+    fn reply(&mut self, id: NotificationId, text: &str) {
+        let Some(entry) = self.store.get(id) else {
+            return;
+        };
+        if entry.notification.reply.is_none() || text.trim().is_empty() {
+            return;
+        }
+        self.deps.signals.notification_replied(id, text);
+        self.after_action(id);
+    }
+
     /// Invokes an action; non-resident notifications are then dismissed.
     fn invoke(&mut self, id: NotificationId, key: &str) {
+        if self.store.get(id).is_none() {
+            return;
+        }
+        self.deps.signals.action_invoked(id, key);
+        self.after_action(id);
+    }
+
+    /// Removes `id` after one of its actions ran, or only its toast if it
+    /// is resident.
+    fn after_action(&mut self, id: NotificationId) {
         let Some(entry) = self.store.get(id) else {
             return;
         };
         let resident = entry.resident;
-        self.deps.signals.action_invoked(id, key);
         if resident {
             self.toasts.remove(id);
             self.dirty = true;
@@ -329,6 +354,7 @@ impl App {
                 }
             }
             UiEvent::InvokeAction { id, key } => self.invoke(id, &key),
+            UiEvent::Reply { id, text } => self.reply(id, &text),
             UiEvent::Dismiss(id) => self.remove(id, CloseReason::Dismissed),
             UiEvent::ClearGroup { key } => {
                 let ids = self.store.clear_group(&key);

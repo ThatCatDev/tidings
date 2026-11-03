@@ -192,6 +192,12 @@ pub enum HitTarget {
         key: String,
     },
     Dismiss(NotificationId),
+    /// A card's "Reply" button: opens its reply field.
+    StartReply(NotificationId),
+    /// The reply field itself: clicking it takes the keyboard back.
+    ReplyField(NotificationId),
+    /// The reply field's send button.
+    SendReply(NotificationId),
     /// Collapsed stack: expand the group.
     ExpandGroup(String),
     /// A collapsed toast's expand (⌄) button.
@@ -208,7 +214,9 @@ pub enum HitTarget {
 }
 
 impl HitTarget {
-    /// The event a completed click on this target emits, if any.
+    /// The event a completed click on this target emits, if any. The reply
+    /// targets emit none: the UI handles them itself (see
+    /// [`Self::reply_click`]).
     #[must_use]
     pub fn click_event(&self) -> Option<UiEvent> {
         Some(match self {
@@ -232,8 +240,20 @@ impl HitTarget {
             Self::ClearGroup(key) => UiEvent::ClearGroup { key: key.clone() },
             Self::ClearAll => UiEvent::ClearAll,
             Self::ToggleDnd => UiEvent::ToggleDnd,
-            Self::Background => return None,
+            Self::StartReply(_) | Self::ReplyField(_) | Self::SendReply(_) | Self::Background => {
+                return None;
+            }
         })
+    }
+
+    /// What a click on a reply target asks of the UI, if this is one.
+    #[must_use]
+    pub fn reply_click(&self) -> Option<ReplyClick> {
+        match self {
+            Self::StartReply(id) | Self::ReplyField(id) => Some(ReplyClick::Focus(*id)),
+            Self::SendReply(id) => Some(ReplyClick::Send(*id)),
+            _ => None,
+        }
     }
 
     /// The notification card this target belongs to (for card hover).
@@ -243,6 +263,9 @@ impl HitTarget {
             Self::Activate(id)
             | Self::Dismiss(id)
             | Self::Action { id, .. }
+            | Self::StartReply(id)
+            | Self::ReplyField(id)
+            | Self::SendReply(id)
             | Self::ExpandToast(id)
             | Self::CollapseToast(id) => Some(*id),
             _ => None,
@@ -252,8 +275,23 @@ impl HitTarget {
     /// Whether the pointer should show the "hand" cursor over this target.
     #[must_use]
     pub fn is_clickable(&self) -> bool {
-        !matches!(self, Self::Background)
+        !matches!(self, Self::Background | Self::ReplyField(_))
     }
+
+    /// Whether this is a text field (the pointer shows an I-beam).
+    #[must_use]
+    pub fn is_text(&self) -> bool {
+        matches!(self, Self::ReplyField(_))
+    }
+}
+
+/// A click on one of a card's reply targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplyClick {
+    /// Open the card's reply field (or give it the keyboard back).
+    Focus(NotificationId),
+    /// Send what is typed.
+    Send(NotificationId),
 }
 
 /// A clickable region. Later entries are on top.

@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::hash::BuildHasher;
 
-use tidings_core::model::{Action, CloseReason, Notification, NotificationId};
+use tidings_core::model::{Action, CloseReason, Notification, NotificationId, Reply};
 use tokio::sync::{mpsc, oneshot};
 use zbus::object_server::SignalEmitter;
 use zbus::{Connection, OwnedVariant, fdo, interface};
@@ -23,14 +23,23 @@ pub const OBJECT_PATH: &str = "/org/freedesktop/Notifications";
 pub const INTERFACE: &str = "org.freedesktop.Notifications";
 
 /// Server capabilities (see DESIGN.md).
-pub const CAPABILITIES: [&str; 6] = [
+/// `inline-reply`, `x-kde-reply-placeholder-text` and `x-kde-origin-name`
+/// are KDE's extensions, which Chrome and others use for replies and web
+/// notifications' origins.
+pub const CAPABILITIES: [&str; 9] = [
     "actions",
     "body",
     "body-hyperlinks",
     "body-markup",
     "icon-static",
+    "inline-reply",
     "persistence",
+    "x-kde-origin-name",
+    "x-kde-reply-placeholder-text",
 ];
+
+/// The action key that offers an inline reply rather than a button.
+pub const INLINE_REPLY: &str = "inline-reply";
 
 /// The D-Bus object. Holds only a sender to the App actor.
 #[derive(Debug)]
@@ -67,10 +76,21 @@ pub fn incoming<S: BuildHasher>(
 ) -> Incoming {
     let hints = parse_hints(hints);
     let mut has_default_action = false;
+    let mut reply = None;
     let mut parsed = Vec::new();
     for pair in actions.as_chunks::<2>().0 {
         if pair[0] == "default" {
             has_default_action = true;
+        } else if pair[0] == INLINE_REPLY {
+            // Only the first one counts, as in KDE.
+            reply.get_or_insert_with(|| Reply {
+                label: Some(pair[1].trim())
+                    .filter(|l| !l.is_empty())
+                    .unwrap_or("Reply")
+                    .to_owned(),
+                placeholder: hints.reply_placeholder.clone(),
+                submit: hints.reply_submit.clone(),
+            });
         } else {
             parsed.push(Action {
                 key: pair[0].clone(),
@@ -88,6 +108,8 @@ pub fn incoming<S: BuildHasher>(
         body: strip_markup(body),
         actions: parsed,
         has_default_action,
+        reply,
+        origin: hints.origin,
         urgency: hints.urgency,
         expire_timeout_ms: u32::try_from(expire_timeout).ok(),
         desktop_entry: hints.desktop_entry,
@@ -162,6 +184,7 @@ impl NotificationServer {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Signal {
     ActionInvoked(u32, String),
+    Replied(u32, String),
     Closed(u32, u32),
 }
 
@@ -182,6 +205,11 @@ impl DbusSignals {
                     Signal::ActionInvoked(id, key) => {
                         emitter
                             .emit(INTERFACE, "ActionInvoked", &(*id, key.as_str()))
+                            .await
+                    }
+                    Signal::Replied(id, text) => {
+                        emitter
+                            .emit(INTERFACE, "NotificationReplied", &(*id, text.as_str()))
                             .await
                     }
                     Signal::Closed(id, reason) => {
@@ -211,6 +239,10 @@ impl SignalSink for DbusSignals {
 
     fn notification_closed(&self, id: NotificationId, reason: CloseReason) {
         self.push(Signal::Closed(id.0, reason as u32));
+    }
+
+    fn notification_replied(&self, id: NotificationId, text: &str) {
+        self.push(Signal::Replied(id.0, text.to_owned()));
     }
 }
 
@@ -264,6 +296,71 @@ mod tests {
         assert_eq!(n.expire_timeout_ms, None);
         assert_eq!(n.desktop_entry.as_deref(), Some("firefox"));
         assert!(n.transient);
+    }
+
+    /// What Chrome sends for a web notification with a reply button.
+    #[test]
+    fn inline_reply_and_origin_like_chrome() {
+        let hints: HashMap<String, OwnedVariant> = [
+            ("x-kde-reply-placeholder-text", Variant::from("Message…")),
+            ("x-kde-origin-name", Variant::from(" web.whatsapp.com ")),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), OwnedVariant::try_from(v).unwrap()))
+        .collect();
+        let inc = incoming(
+            "Google Chrome".into(),
+            0,
+            "",
+            "Ada".into(),
+            "see you at 6?",
+            &strings(&[
+                "inline-reply",
+                "Reply",
+                "0",
+                "Mark as read",
+                "inline-reply",
+                "Second",
+                "default",
+                "Activate",
+                "settings",
+                "Settings",
+            ]),
+            &hints,
+            -1,
+        );
+        let n = inc.notification;
+        assert_eq!(
+            n.reply,
+            Some(Reply {
+                label: "Reply".into(),
+                placeholder: Some("Message…".into()),
+                submit: None,
+            }),
+            "the first inline-reply wins"
+        );
+        let keys: Vec<_> = n.actions.iter().map(|a| a.key.as_str()).collect();
+        assert_eq!(keys, ["0", "settings"], "inline-reply is not a button");
+        assert!(n.has_default_action);
+        assert_eq!(n.origin.as_deref(), Some("web.whatsapp.com"));
+
+        // A blank label still gets one; without the action there is no reply.
+        let inc = incoming(
+            "a".into(),
+            0,
+            "",
+            "s".into(),
+            "",
+            &strings(&["inline-reply", " "]),
+            &HashMap::new(),
+            -1,
+        );
+        assert_eq!(
+            inc.notification.reply.map(|r| r.label),
+            Some("Reply".into())
+        );
+        let inc = incoming("a".into(), 0, "", "s".into(), "", &[], &hints, -1);
+        assert_eq!(inc.notification.reply, None);
     }
 
     #[test]

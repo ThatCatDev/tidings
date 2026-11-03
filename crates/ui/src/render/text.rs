@@ -15,7 +15,7 @@ use tiny_skia::PixmapMut;
 use crate::geom::{PxRect, Rect, f32_to_u32};
 use crate::scene::Align;
 use crate::style::{Rgba, TextStyle, Type, Weight};
-use crate::text::{TextFit, TextMeasure, ellipsize, normalise};
+use crate::text::{NO_WRAP, TextFit, TextMeasure, ellipsize, normalise};
 
 /// Upper bound on cached shaped buffers before the cache is flushed.
 const CACHE_LIMIT: usize = 1024;
@@ -193,6 +193,17 @@ impl TextMeasure for TextEngine {
         self.typ.line_height(style)
     }
 
+    fn caret_stops(&mut self, text: &str, style: TextStyle) -> Vec<f32> {
+        // Shaped at the same width the painter draws it with, so the
+        // caret lands exactly between the drawn glyphs.
+        let buf = self.buffer(text, style, NO_WRAP);
+        let glyphs: Vec<(usize, usize, f32, f32)> = buf
+            .layout_runs()
+            .flat_map(|run| run.glyphs.iter().map(|g| (g.start, g.end, g.x, g.w)))
+            .collect();
+        caret_stops_from_glyphs(text, &glyphs)
+    }
+
     fn fit(&mut self, text: &str, style: TextStyle, max_width: f32, max_lines: u32) -> TextFit {
         let key = FitKey {
             text: text.to_owned(),
@@ -229,6 +240,30 @@ impl TextMeasure for TextEngine {
         self.fits.insert(key, fit.clone());
         fit
     }
+}
+
+/// Caret stops (see [`TextMeasure::caret_stops`]) from shaped glyphs given
+/// as `(start byte, end byte, x, width)`. A char inside a multi-char cluster
+/// (a ligature, say) gets a stop part-way across it, in proportion to its
+/// byte offset; a char no glyph covers shares the previous stop.
+fn caret_stops_from_glyphs(text: &str, glyphs: &[(usize, usize, f32, f32)]) -> Vec<f32> {
+    let width = glyphs.iter().map(|&(_, _, x, w)| x + w).fold(0.0, f32::max);
+    let mut stops = Vec::with_capacity(text.len() + 1);
+    let mut last = 0.0;
+    for (b, _) in text.char_indices() {
+        let at = glyphs
+            .iter()
+            .find(|&&(s, e, _, _)| s <= b && b < e)
+            .map(|&(s, e, x, w)| {
+                let frac = crate::geom::u32_to_f32(u32::try_from(b - s).unwrap_or(0))
+                    / crate::geom::u32_to_f32(u32::try_from(e - s).unwrap_or(1).max(1));
+                x + w * frac
+            });
+        last = at.unwrap_or(last);
+        stops.push(last);
+    }
+    stops.push(width);
+    stops
 }
 
 fn weight(w: Weight) -> u16 {
@@ -366,6 +401,25 @@ fn blit_glyph(
 mod tests {
     use super::*;
     use tiny_skia::Pixmap;
+
+    #[test]
+    fn caret_stops_split_clusters_and_keep_spaces() {
+        // "fi" as one ligature glyph, then a space and "é" (2 bytes).
+        let glyphs = [(0, 2, 0.0, 10.0), (2, 3, 10.0, 4.0), (3, 5, 14.0, 6.0)];
+        assert_eq!(
+            caret_stops_from_glyphs("fi é", &glyphs),
+            [0.0, 5.0, 10.0, 14.0, 20.0]
+        );
+        assert_eq!(caret_stops_from_glyphs("", &[]), [0.0]);
+    }
+
+    #[test]
+    fn caret_stops_with_real_fonts_count_trailing_spaces() {
+        let mut t = TextEngine::new();
+        let stops = t.caret_stops("ab  ", TextStyle::Body);
+        assert_eq!(stops.len(), 5);
+        assert!(stops.windows(2).all(|w| w[0] < w[1]), "{stops:?}");
+    }
 
     #[test]
     fn fits_wrap_and_ellipsize_with_real_fonts() {

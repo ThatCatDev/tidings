@@ -17,7 +17,7 @@ use std::sync::mpsc;
 use std::thread::sleep;
 use std::time::{Duration, SystemTime};
 
-use tidings_core::model::{Action, Image, NotificationId, Urgency};
+use tidings_core::model::{Action, Image, NotificationId, Reply, Urgency};
 use tidings_core::theme::{Mode, Rgb, Theme};
 use tidings_core::ui::{PanelCommand, UiUpdate};
 use tidings_core::view::{CardView, GroupView, ToastView, ViewModel};
@@ -32,6 +32,8 @@ fn card(id: u32, app: &str, icon: Option<&str>, summary: &str, body: &str, time:
         body: body.into(),
         time_label: time.into(),
         actions: Vec::new(),
+        reply: None,
+        origin: None,
         clickable: true,
         urgency: Urgency::Normal,
     }
@@ -71,11 +73,12 @@ fn sample(expanded: bool) -> ViewModel {
         "Hi James, attached is the draft agenda for Thursday. Could you add the Hyprland roadmap items before the meeting? Thanks!",
         "2m",
     );
-    mail.actions = vec![
-        action("reply", "Reply"),
-        action("archive", "Archive"),
-        action("spam", "Mark as Spam"),
-    ];
+    mail.reply = Some(Reply {
+        label: "Reply".into(),
+        placeholder: Some("Reply to Thunderbird…".into()),
+        submit: None,
+    });
+    mail.actions = vec![action("archive", "Archive"), action("spam", "Mark as Spam")];
     let mut photo = card(
         11,
         "Firefox",
@@ -242,6 +245,7 @@ fn open_and_hold(ui: &dyn tidings_core::ui::UiHandle, hold: Duration) {
 /// Renders the mail toast's three states over a dark backdrop at the
 /// laptop's 1.6 scale.
 fn render_states(dir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    use tidings_ui::compose::ReplyDraft;
     use tidings_ui::layout::layout_toast;
     use tidings_ui::render::Painter;
     use tidings_ui::scene::HitTarget;
@@ -257,13 +261,40 @@ fn render_states(dir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>
         .find(|t| t.card.id == NotificationId(12))
         .ok_or("no mail toast")?;
     let hover = HitTarget::Activate(mail.card.id);
+    let typing = |text: &str, focused| ReplyDraft {
+        id: mail.card.id,
+        text: text.to_owned(),
+        caret: text.len(),
+        focused,
+    };
+    let empty = typing("", true);
+    let draft = typing("Sure, I'll add them tonight — see you Thursday!", true);
+    let unfocused = typing("Sure", false);
     let states = [
-        ("collapsed", toast(mail.card.clone(), false), None),
-        ("hover", toast(mail.card.clone(), false), Some(&hover)),
-        ("expanded", toast(mail.card.clone(), true), None),
+        ("collapsed", toast(mail.card.clone(), false), None, None),
+        ("hover", toast(mail.card.clone(), false), Some(&hover), None),
+        ("expanded", toast(mail.card.clone(), true), None, None),
+        (
+            "reply-empty",
+            toast(mail.card.clone(), true),
+            None,
+            Some(&empty),
+        ),
+        (
+            "reply-typing",
+            toast(mail.card.clone(), true),
+            None,
+            Some(&draft),
+        ),
+        (
+            "reply-unfocused",
+            toast(mail.card.clone(), true),
+            None,
+            Some(&unfocused),
+        ),
     ];
-    for (name, t, hovered) in states {
-        let lay = layout_toast(&t, scale, hovered, &painter.style, &mut painter.text);
+    for (name, t, hovered, draft) in states {
+        let lay = layout_toast(&t, scale, hovered, draft, &painter.style, &mut painter.text);
         let (w, h) = tidings_ui::render::physical_size(&lay.scene, scale);
         let mut pm = tiny_skia::Pixmap::new(w, h).ok_or("empty toast")?;
         pm.fill(tiny_skia::Color::from_rgba8(0x1b, 0x12, 0x14, 0xff));
@@ -368,7 +399,7 @@ fn render_themes(dir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>
             (toast(mail.clone(), true), None),
         ];
         for (t, hovered) in states {
-            let lay = layout_toast(&t, scale, hovered, &painter.style, &mut painter.text);
+            let lay = layout_toast(&t, scale, hovered, None, &painter.style, &mut painter.text);
             y += place(&lay.scene, &mut painter, 2.0 * gap + panel_w - 12.0, y)? - 12.0;
         }
         let path = dir.join(format!("theme-{name}.png"));

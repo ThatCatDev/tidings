@@ -50,6 +50,9 @@ pub struct Canvas {
     pub frame_pending: bool,
     /// Something changed and a redraw is due at the next opportunity.
     pub dirty: bool,
+    /// The keyboard mode the surface was created with, and the current one.
+    default_keyboard: KeyboardInteractivity,
+    keyboard: KeyboardInteractivity,
 }
 
 impl Canvas {
@@ -100,6 +103,8 @@ impl Canvas {
             configured: false,
             frame_pending: false,
             dirty: true,
+            default_keyboard: spec.keyboard,
+            keyboard: spec.keyboard,
         })
     }
 
@@ -229,6 +234,17 @@ impl Canvas {
         self.dirty = false;
         self.layer.commit();
         Ok(())
+    }
+
+    /// Switches the surface's keyboard mode (`None` = the one it was
+    /// created with). Takes effect on commit, which this does.
+    pub fn set_keyboard(&mut self, mode: Option<KeyboardInteractivity>) {
+        let mode = mode.unwrap_or(self.default_keyboard);
+        if mode != self.keyboard {
+            self.keyboard = mode;
+            self.layer.set_keyboard_interactivity(mode);
+            self.layer.commit();
+        }
     }
 
     /// Restricts input to `rects` (logical px). An empty list means no input.

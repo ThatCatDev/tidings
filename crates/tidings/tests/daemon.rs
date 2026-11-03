@@ -36,7 +36,9 @@ async fn capabilities_and_server_information() {
         "body-hyperlinks",
         "body-markup",
         "icon-static",
+        "inline-reply",
         "persistence",
+        "x-kde-origin-name",
     ] {
         assert!(caps.iter().any(|c| c == cap), "missing {cap}: {caps:?}");
     }
@@ -176,6 +178,54 @@ async fn action_invoked_and_dismissed_signals() {
     let args = sig.args().unwrap();
     assert_eq!((args.id, args.action_key.as_str()), (resident, "stop"));
     assert_eq!(t.value(Request::Count).await, "1");
+    t.shutdown().await;
+}
+
+#[tokio::test]
+async fn inline_reply_is_signalled() {
+    let t = TestDaemon::start().await;
+    let proxy = t.proxy().await;
+    let mut replied = proxy.receive_notification_replied().await.unwrap();
+    let mut closed = proxy.receive_notification_closed().await.unwrap();
+    let mut hints = HashMap::new();
+    hints.insert(
+        "x-kde-reply-placeholder-text",
+        OwnedVariant::try_from(Variant::from("Message")).unwrap(),
+    );
+    let id = proxy
+        .notify(
+            "chat",
+            0,
+            "",
+            "Ada",
+            "6?",
+            &["inline-reply", "Reply"],
+            hints,
+            0,
+        )
+        .await
+        .unwrap();
+    let card = t
+        .wait_ui(|u| view(u).and_then(|v| v.toasts.first().map(|t| t.card.clone())))
+        .await;
+    assert_eq!(card.actions.len(), 0);
+    assert_eq!(
+        card.reply.and_then(|r| r.placeholder).as_deref(),
+        Some("Message")
+    );
+
+    t.daemon()
+        .events()
+        .send(AppEvent::Ui(UiEvent::Reply {
+            id: NotificationId(id),
+            text: "yes 👍".into(),
+        }))
+        .unwrap();
+    let sig = next(&mut replied).await;
+    let args = sig.args().unwrap();
+    assert_eq!((args.id, args.text.as_str()), (id, "yes 👍"));
+    let sig = next(&mut closed).await;
+    assert_eq!(sig.args().unwrap().reason, 2);
     t.shutdown().await;
 }
 

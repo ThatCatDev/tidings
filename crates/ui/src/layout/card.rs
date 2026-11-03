@@ -1,12 +1,13 @@
 //! Notification card layout, shared by panel cards, stacks and toasts.
 
-use tidings_core::model::{Action, Image, Urgency};
+use tidings_core::model::{Image, NotificationId, Urgency};
 use tidings_core::view::CardView;
 
+use crate::compose::ReplyDraft;
 use crate::geom::{Point, Rect, snap};
 use crate::scene::{Align, GlyphKind, HitTarget, Monogram, Node, Scene};
 use crate::style::{Fill, MONOGRAM_TINTS, Role, Style, TextStyle, fills, metrics as m};
-use crate::text::{TextFit, TextMeasure};
+use crate::text::{NO_WRAP, TextFit, TextMeasure};
 
 /// How a card is presented.
 #[derive(Debug, Clone)]
@@ -71,7 +72,9 @@ pub struct CardLayout {
     time: (Rect, TextFit),
     summary: Option<(Rect, TextFit)>,
     body: Option<(Rect, TextFit)>,
-    actions: Vec<(Rect, TextFit, String)>,
+    actions: Vec<(Rect, TextFit, HitTarget)>,
+    /// The reply field, while the user is replying to this card.
+    field: Option<FieldLayout>,
 }
 
 /// Space between text and a corner-reserved button.
@@ -81,21 +84,59 @@ fn fit_rect(m: &mut dyn TextMeasure, text: &str, style: TextStyle, w: f32, lines
     m.fit(text, style, w.max(1.0), lines)
 }
 
+/// The inline reply field of a card being replied to, card-relative.
+#[derive(Debug, Clone)]
+struct FieldLayout {
+    id: NotificationId,
+    rect: Rect,
+    /// Where the typed text (or placeholder) shows; text scrolled out of it
+    /// is clipped.
+    text_area: Rect,
+    content: FieldContent,
+    /// Caret x from the start of the text; drawn only while `focused`.
+    caret: f32,
+    /// How far the text is drawn left so the caret stays in view.
+    scroll: f32,
+    focused: bool,
+    send: Rect,
+    send_label: TextFit,
+    can_send: bool,
+}
+
+#[derive(Debug, Clone)]
+enum FieldContent {
+    /// Grey hint text in an empty field.
+    Placeholder(TextFit),
+    /// The draft, as typed.
+    Typed(String),
+}
+
+/// Gap between the field's edge and the text, and around the send button.
+const FIELD_PAD: f32 = 12.0;
+const SEND_INSET: f32 = 3.0;
+/// Width of the caret bar.
+const CARET_W: f32 = 1.5;
+
 /// Measures a panel card of `width` (pure; positions are card-relative).
+/// `draft` is the reply being typed, if any; it shows only on its own card.
 pub fn measure_card(
     card: &CardView,
     width: f32,
     body_lines: u32,
+    draft: Option<&ReplyDraft>,
     scale: f32,
     meas: &mut dyn TextMeasure,
 ) -> CardLayout {
-    measure_card_with(card, CardSpec::panel(width, body_lines), scale, meas)
+    measure_card_with(card, CardSpec::panel(width, body_lines), draft, scale, meas)
 }
 
-/// Measures a card to `spec` (pure; positions are card-relative).
+/// Measures a card to `spec` (pure; positions are card-relative). `draft`
+/// is the reply being typed, if any; it shows only on its own card, in
+/// place of the action buttons.
 pub fn measure_card_with(
     card: &CardView,
     spec: CardSpec,
+    draft: Option<&ReplyDraft>,
     scale: f32,
     meas: &mut dyn TextMeasure,
 ) -> CardLayout {
@@ -129,7 +170,7 @@ pub fn measure_card_with(
     );
     let time_rect = Rect::new(row_right - time.width, pad, time.width, meta_h);
     let app_w = (row_right - text_x - time.width - 8.0).max(1.0);
-    let app = fit_rect(meas, &card.app_name, TextStyle::Meta, app_w, 1);
+    let app = fit_rect(meas, &source_label(card), TextStyle::Meta, app_w, 1);
     let app_rect = Rect::new(text_x, pad, app_w, meta_h);
 
     let mut y = pad + meta_h + m::LINE_GAP;
@@ -159,13 +200,17 @@ pub fn measure_card_with(
     };
     let icon = Rect::new(pad, icon_y, m::ICON_SIZE, m::ICON_SIZE);
 
-    let (actions, bottom) = measure_actions(
-        &card.actions,
-        (text_x, col_right),
-        content_bottom,
-        scale,
-        meas,
-    );
+    let column = (text_x, col_right);
+    let draft = draft.filter(|d| d.id == card.id && card.reply.is_some());
+    let (actions, field, bottom) = if let (Some(draft), Some(reply)) = (draft, &card.reply) {
+        let field = measure_field(draft, reply, column, content_bottom, meas);
+        let bottom = field.rect.bottom();
+        (Vec::new(), Some(field), bottom)
+    } else {
+        let (actions, bottom) =
+            measure_actions(&buttons(card), column, content_bottom, scale, meas);
+        (actions, None, bottom)
+    };
 
     CardLayout {
         width,
@@ -176,19 +221,55 @@ pub fn measure_card_with(
         summary,
         body,
         actions,
+        field,
     }
+}
+
+/// The card's first row: the app, and where in it the notification comes
+/// from when the app says (a browser names the website): "Google Chrome ·
+/// web.whatsapp.com".
+#[must_use]
+pub fn source_label(card: &CardView) -> String {
+    match card.origin.as_deref() {
+        Some(origin) if !card.app_name.trim().is_empty() => {
+            format!("{} · {origin}", card.app_name)
+        }
+        Some(origin) => origin.to_owned(),
+        None => card.app_name.clone(),
+    }
+}
+
+/// The card's buttons, labels and targets: "Reply" first (as macOS puts
+/// it), then the client's actions in order.
+fn buttons(card: &CardView) -> Vec<(&str, HitTarget)> {
+    let reply = card
+        .reply
+        .as_ref()
+        .map(|r| (r.label.as_str(), HitTarget::StartReply(card.id)));
+    reply
+        .into_iter()
+        .chain(card.actions.iter().map(|a| {
+            (
+                a.label.as_str(),
+                HitTarget::Action {
+                    id: card.id,
+                    key: a.key.clone(),
+                },
+            )
+        }))
+        .collect()
 }
 
 /// Action pills of equal width, in rows under the text column `(left,
 /// right)` starting below `top`. Returns the pills and the last row's bottom
 /// (`top` if there are none).
 fn measure_actions(
-    list: &[Action],
+    list: &[(&str, HitTarget)],
     (left, right): (f32, f32),
     top: f32,
     scale: f32,
     meas: &mut dyn TextMeasure,
-) -> (Vec<(Rect, TextFit, String)>, f32) {
+) -> (Vec<(Rect, TextFit, HitTarget)>, f32) {
     let mut actions = Vec::new();
     let mut bottom = top;
     for row in list.chunks(m::ACTIONS_PER_ROW) {
@@ -196,8 +277,7 @@ fn measure_actions(
         let pill_w = snap((right - left - (n - 1.0) * m::ACTION_GAP) / n, scale);
         let row_y = bottom + m::ACTION_GAP + 2.0;
         let mut x = left;
-        for action in row {
-            let label = &action.label;
+        for (label, target) in row {
             let f = fit_rect(
                 meas,
                 label,
@@ -208,13 +288,77 @@ fn measure_actions(
             actions.push((
                 Rect::new(x, row_y, pill_w, m::PILL_HEIGHT),
                 f,
-                action.key.clone(),
+                target.clone(),
             ));
             x += pill_w + m::ACTION_GAP;
         }
         bottom = row_y + m::PILL_HEIGHT;
     }
     (actions, bottom)
+}
+
+/// The reply field under the text column `(left, right)`, below `top`: the
+/// draft (or the placeholder) on the left, the send button inside its right
+/// end. The text scrolls left just enough to keep the caret in view.
+fn measure_field(
+    draft: &ReplyDraft,
+    reply: &tidings_core::model::Reply,
+    (left, right): (f32, f32),
+    top: f32,
+    meas: &mut dyn TextMeasure,
+) -> FieldLayout {
+    let rect = Rect::new(
+        left,
+        top + m::ACTION_GAP + 2.0,
+        right - left,
+        m::REPLY_FIELD_HEIGHT,
+    );
+    let send_label = meas.fit(
+        reply.submit.as_deref().unwrap_or("Send"),
+        TextStyle::Button,
+        rect.w / 3.0,
+        1,
+    );
+    let send_h = rect.h - 2.0 * SEND_INSET;
+    let send_w = send_label.width + 2.0 * m::PILL_PAD_X;
+    let send = Rect::new(
+        rect.right() - SEND_INSET - send_w,
+        rect.y + SEND_INSET,
+        send_w,
+        send_h,
+    );
+    let lh = meas.line_height(TextStyle::Body);
+    let text_area = Rect::new(
+        rect.x + FIELD_PAD,
+        rect.y + (rect.h - lh) / 2.0,
+        (send.x - FIELD_PAD / 2.0 - rect.x - FIELD_PAD).max(1.0),
+        lh,
+    );
+    let (content, caret) = if draft.text.is_empty() {
+        let hint = reply.placeholder.as_deref().unwrap_or("Reply");
+        let fit = meas.fit(hint, TextStyle::Body, text_area.w, 1);
+        (FieldContent::Placeholder(fit), 0.0)
+    } else {
+        let stops = meas.caret_stops(&draft.text, TextStyle::Body);
+        let index = draft
+            .text
+            .get(..draft.caret)
+            .map_or(stops.len() - 1, |head| head.chars().count());
+        let caret = stops.get(index).copied().unwrap_or_default();
+        (FieldContent::Typed(draft.text.clone()), caret)
+    };
+    FieldLayout {
+        id: draft.id,
+        rect,
+        text_area,
+        content,
+        caret,
+        scroll: (caret + CARET_W - text_area.w).max(0.0),
+        focused: draft.focused,
+        send,
+        send_label,
+        can_send: draft.can_send(),
+    }
 }
 
 fn text(rect: Rect, fit: &TextFit, style: TextStyle, fill: Fill, align: Align) -> Node {
@@ -390,14 +534,102 @@ pub fn emit_card_content(
 
     let radius = opts.style.card_radius(lay.height);
     add_hit(scene, bounds, radius, opts.body_target.clone(), hit_clip);
-    for (r, f, key) in &lay.actions {
-        let target = HitTarget::Action {
-            id: card.id,
-            key: key.clone(),
-        };
-        let hovered = opts.hovered_target.as_ref() == Some(&target);
-        pill(scene, opts.style, at(*r), f, hovered, target, hit_clip);
+    for (r, f, target) in &lay.actions {
+        let hovered = opts.hovered_target.as_ref() == Some(target);
+        pill(
+            scene,
+            opts.style,
+            at(*r),
+            f,
+            hovered,
+            target.clone(),
+            hit_clip,
+        );
     }
+    if let Some(field) = &lay.field {
+        emit_field(scene, field, origin, opts, hit_clip);
+    }
+}
+
+/// Paints the reply field: a well with the draft (or placeholder) and a
+/// caret, outlined in the accent colour while it has the keyboard, and the
+/// send button, dimmed until there is something to send.
+fn emit_field(
+    scene: &mut Scene,
+    field: &FieldLayout,
+    origin: Point,
+    opts: &CardOpts<'_>,
+    hit_clip: Rect,
+) {
+    let style = opts.style;
+    let at = |r: Rect| r.translate(origin.x, origin.y);
+    let rect = at(field.rect);
+    let area = at(field.text_area);
+    let lit =
+        field.focused || opts.hovered_target.as_ref() == Some(&HitTarget::ReplyField(field.id));
+    let radius = style.button_radius(rect.h);
+    scene.push(Node::RoundRect {
+        rect,
+        radius,
+        fill: Some(fills::FIELD),
+        stroke: Some(if lit {
+            fills::FIELD_FOCUS
+        } else {
+            fills::FIELD_RING
+        }),
+    });
+    add_hit(
+        scene,
+        rect,
+        radius,
+        HitTarget::ReplyField(field.id),
+        hit_clip,
+    );
+    scene.push(Node::PushClip(area.outset(CARET_W)));
+    match &field.content {
+        FieldContent::Placeholder(fit) => scene.push(text(
+            area,
+            fit,
+            TextStyle::Body,
+            Fill::solid(Role::OnSurfaceVariant),
+            Align::Left,
+        )),
+        FieldContent::Typed(typed) => scene.push(Node::Text {
+            rect: Rect::new(area.x - field.scroll, area.y, NO_WRAP, area.h),
+            text: typed.clone(),
+            style: TextStyle::Body,
+            fill: Fill::solid(Role::OnSurface),
+            align: Align::Left,
+            wrap_width: NO_WRAP,
+        }),
+    }
+    if field.focused {
+        scene.push(Node::RoundRect {
+            rect: Rect::new(
+                area.x + field.caret - field.scroll,
+                area.y + 1.0,
+                CARET_W,
+                area.h - 2.0,
+            ),
+            radius: CARET_W / 2.0,
+            fill: Some(Fill::solid(Role::Primary)),
+            stroke: None,
+        });
+    }
+    scene.push(Node::PopClip);
+    let send = HitTarget::SendReply(field.id);
+    let hovered = field.can_send && opts.hovered_target.as_ref() == Some(&send);
+    scene.with_opacity(if field.can_send { 1.0 } else { 0.45 }, |s| {
+        pill(
+            s,
+            style,
+            at(field.send),
+            &field.send_label,
+            hovered,
+            send,
+            hit_clip,
+        );
+    });
 }
 
 /// Adds a hit region clipped to `clip` (dropped if fully outside).
@@ -489,22 +721,22 @@ mod tests {
         let mut c = sample_card(1, "Mail");
         c.body.clear();
         c.actions.clear();
-        let plain = measure_card(&c, 356.0, 2, 1.0, &mut meas);
+        let plain = measure_card(&c, 356.0, 2, None, 1.0, &mut meas);
         // Padding + icon dominates a one-line card.
         assert!((plain.height - (2.0 * m::CARD_PADDING + m::ICON_SIZE)).abs() < 1.0);
 
         let mut with_body = c.clone();
         with_body.body = "word ".repeat(80);
-        let b = measure_card(&with_body, 356.0, 2, 1.0, &mut meas);
+        let b = measure_card(&with_body, 356.0, 2, None, 1.0, &mut meas);
         assert!(b.height > plain.height);
         assert_eq!(b.body.as_ref().map(|(_, f)| f.lines), Some(2));
 
-        let expanded = measure_card(&with_body, 356.0, 8, 1.0, &mut meas);
+        let expanded = measure_card(&with_body, 356.0, 8, None, 1.0, &mut meas);
         assert!(expanded.height > b.height);
 
         let mut with_actions = c.clone();
         with_actions.actions = sample_card(1, "x").actions;
-        let a = measure_card(&with_actions, 356.0, 2, 1.0, &mut meas);
+        let a = measure_card(&with_actions, 356.0, 2, None, 1.0, &mut meas);
         assert!(a.height >= plain.height + m::PILL_HEIGHT);
         assert_eq!(a.actions.len(), 2);
         // Equal-width pills stay inside the card.
@@ -513,6 +745,122 @@ mod tests {
                 .iter()
                 .all(|(r, ..)| r.right() <= 356.0 - m::CARD_PADDING + 0.5)
         );
+    }
+
+    fn replyable(id: u32) -> CardView {
+        let mut c = sample_card(id, "Chat");
+        c.actions.truncate(1);
+        c.reply = Some(tidings_core::model::Reply {
+            label: "Answer".into(),
+            placeholder: Some("Message".into()),
+            submit: Some("Go".into()),
+        });
+        c
+    }
+
+    fn draft(id: u32, text: &str, focused: bool) -> ReplyDraft {
+        ReplyDraft {
+            id: NotificationId(id),
+            text: text.into(),
+            caret: text.len(),
+            focused,
+        }
+    }
+
+    fn targets(scene: &Scene) -> Vec<HitTarget> {
+        scene.hits.iter().map(|h| h.target.clone()).collect()
+    }
+
+    fn emit(c: &CardView, lay: &CardLayout) -> Scene {
+        let style = Style::default();
+        let opts = CardOpts {
+            style: &style,
+            body_target: HitTarget::Activate(c.id),
+            close_target: HitTarget::Dismiss(c.id),
+            hovered: false,
+            hovered_target: None,
+        };
+        let mut scene = Scene::new(crate::geom::Size::new(lay.width, lay.height));
+        let clip = Rect::new(0.0, 0.0, lay.width, lay.height);
+        emit_card_content(&mut scene, c, lay, Point::new(0.0, 0.0), &opts, clip);
+        scene
+    }
+
+    #[test]
+    fn origin_follows_the_app_name() {
+        let mut c = sample_card(1, "Google Chrome");
+        assert_eq!(source_label(&c), "Google Chrome");
+        c.origin = Some("web.whatsapp.com".into());
+        assert_eq!(source_label(&c), "Google Chrome · web.whatsapp.com");
+        c.app_name.clear();
+        assert_eq!(source_label(&c), "web.whatsapp.com");
+    }
+
+    #[test]
+    fn reply_button_comes_first() {
+        let c = replyable(1);
+        let lay = measure_card(&c, 356.0, 2, None, 1.0, &mut MonoMeasure);
+        let labels: Vec<_> = lay
+            .actions
+            .iter()
+            .map(|(_, f, _)| f.text.as_str())
+            .collect();
+        assert_eq!(labels, ["Answer", "Reply"], "then the client's own actions");
+        assert_eq!(lay.actions[0].2, HitTarget::StartReply(NotificationId(1)));
+        assert!(lay.field.is_none());
+        // Another card's draft changes nothing.
+        let other = draft(2, "hi", true);
+        let lay2 = measure_card(&c, 356.0, 2, Some(&other), 1.0, &mut MonoMeasure);
+        assert_eq!(lay2.actions.len(), 2);
+        assert!((lay2.height - lay.height).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn replying_swaps_the_buttons_for_a_field() {
+        let c = replyable(1);
+        let d = draft(1, "", true);
+        let lay = measure_card(&c, 356.0, 2, Some(&d), 1.0, &mut MonoMeasure);
+        assert_eq!(lay.actions.len(), 0);
+        let field = lay.field.as_ref().unwrap_or_else(|| panic!("field"));
+        assert!(matches!(&field.content, FieldContent::Placeholder(f) if f.text == "Message"));
+        assert_eq!(field.send_label.text, "Go");
+        assert!(!field.can_send);
+        assert!(field.send.right() <= field.rect.right());
+        assert!(field.text_area.right() < field.send.x);
+        let hits = targets(&emit(&c, &lay));
+        let id = NotificationId(1);
+        let field_at = hits.iter().position(|t| *t == HitTarget::ReplyField(id));
+        let send_at = hits.iter().position(|t| *t == HitTarget::SendReply(id));
+        assert!(field_at < send_at, "send sits on top of the field");
+        // A card without a reply ignores a draft for it.
+        let mut plain = c.clone();
+        plain.reply = None;
+        let lay = measure_card(&plain, 356.0, 2, Some(&d), 1.0, &mut MonoMeasure);
+        assert!(lay.field.is_none());
+    }
+
+    #[test]
+    fn long_drafts_scroll_to_keep_the_caret_visible() {
+        let c = replyable(1);
+        let short = draft(1, "hi", true);
+        let lay = measure_card(&c, 356.0, 2, Some(&short), 1.0, &mut MonoMeasure);
+        let f = lay.field.unwrap_or_else(|| panic!("field"));
+        assert!(f.scroll.abs() < f32::EPSILON && f.can_send && f.focused);
+        let long = draft(1, &"word ".repeat(40), true);
+        let lay = measure_card(&c, 356.0, 2, Some(&long), 1.0, &mut MonoMeasure);
+        let f = lay.field.unwrap_or_else(|| panic!("field"));
+        assert!(f.scroll > 0.0);
+        let shown = f.caret - f.scroll;
+        assert!(
+            shown > 0.0 && shown <= f.text_area.w,
+            "{shown} in {}",
+            f.text_area.w
+        );
+        // With the caret back at the start, nothing scrolls.
+        let mut home = long.clone();
+        home.caret = 0;
+        let lay = measure_card(&c, 356.0, 2, Some(&home), 1.0, &mut MonoMeasure);
+        assert!(lay.field.is_some_and(|f| f.scroll.abs() < f32::EPSILON));
     }
 
     #[test]
@@ -563,7 +911,7 @@ mod tests {
         let mut c = sample_card(1, "Mail");
         c.body = "word ".repeat(80);
         let spec = CardSpec::panel(356.0, 4);
-        let centred = measure_card_with(&c, spec, 1.0, &mut meas);
+        let centred = measure_card_with(&c, spec, None, 1.0, &mut meas);
         let text_mid = f32::midpoint(
             m::CARD_PADDING,
             centred.body.as_ref().map_or(0.0, |(r, _)| r.bottom()),
@@ -575,7 +923,7 @@ mod tests {
             icon_align: IconAlign::Top,
             ..spec
         };
-        let topped = measure_card_with(&c, top, 1.0, &mut meas);
+        let topped = measure_card_with(&c, top, None, 1.0, &mut meas);
         assert!((topped.icon.y - topped.app.0.y).abs() < f32::EPSILON);
         assert_eq!(topped.height, centred.height);
     }
@@ -585,13 +933,14 @@ mod tests {
         let mut meas = MonoMeasure;
         let c = sample_card(1, "Mail");
         let spec = CardSpec::panel(356.0, 2);
-        let a = measure_card_with(&c, spec, 1.0, &mut meas);
+        let a = measure_card_with(&c, spec, None, 1.0, &mut meas);
         let b = measure_card_with(
             &c,
             CardSpec {
                 pad_bottom: spec.pad_bottom + 2.0,
                 ..spec
             },
+            None,
             1.0,
             &mut meas,
         );

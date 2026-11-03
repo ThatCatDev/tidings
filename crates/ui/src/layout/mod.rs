@@ -8,6 +8,7 @@ pub mod toast;
 
 use tidings_core::view::{CardView, GroupView, ViewModel};
 
+use crate::compose::ReplyDraft;
 use crate::geom::{Point, Rect, Size, snap};
 use crate::scene::{Align, GlyphKind, HitTarget, Node, Scene};
 use crate::style::{Fill, Role, Style, TextStyle, fills, metrics as m};
@@ -24,6 +25,8 @@ pub struct Interaction {
     pub scroll: f32,
     /// Groups mid expand/collapse, by key: 0 = stacked, 1 = listed.
     pub morph: Vec<(String, f32)>,
+    /// The reply being typed into a card, if any.
+    pub reply: Option<ReplyDraft>,
 }
 
 impl Interaction {
@@ -113,7 +116,16 @@ pub fn layout_panel(
     let groups: Vec<GroupLayout> = view
         .groups
         .iter()
-        .map(|g| GroupLayout::measure(g, col_w, scale, ui.morph_of(&g.key), meas))
+        .map(|g| {
+            GroupLayout::measure(
+                g,
+                col_w,
+                scale,
+                ui.morph_of(&g.key),
+                ui.reply.as_ref(),
+                meas,
+            )
+        })
         .collect();
     let gaps = crate::geom::u32_to_f32(u32::try_from(groups.len().saturating_sub(1)).unwrap_or(0));
     let content_h = top_slack + groups.iter().map(|g| g.height).sum::<f32>() + gaps * m::CARD_GAP;
@@ -399,6 +411,7 @@ impl GroupLayout {
         w: f32,
         scale: f32,
         morph: Option<f32>,
+        draft: Option<&ReplyDraft>,
         meas: &mut dyn TextMeasure,
     ) -> Self {
         let lines = if g.expanded {
@@ -415,14 +428,14 @@ impl GroupLayout {
                 height: 0.0,
             },
             [one] => {
-                let c = measure_card(one, w, lines, scale, meas);
+                let c = measure_card(one, w, lines, draft, scale, meas);
                 Self {
                     height: c.height,
                     shape: GroupShape::Single(c),
                 }
             }
             [top, rest @ ..] if !g.expanded && morph.is_none() => {
-                let c = measure_card(top, w, lines, scale, meas);
+                let c = measure_card(top, w, lines, draft, scale, meas);
                 let sheets = rest.len().min(m::MAX_SHEETS);
                 Self {
                     height: stack_height(&c, sheets),
@@ -432,7 +445,7 @@ impl GroupLayout {
             all => {
                 let cards: Vec<_> = all
                     .iter()
-                    .map(|c| measure_card(c, w, lines, scale, meas))
+                    .map(|c| measure_card(c, w, lines, draft, scale, meas))
                     .collect();
                 let header = GroupHeader::measure(&g.app_name, w, meas);
                 let list_h = m::GROUP_HEADER_HEIGHT
@@ -681,6 +694,8 @@ pub(crate) mod tests {
                     label: "Archive".into(),
                 },
             ],
+            reply: None,
+            origin: None,
             clickable: true,
             urgency: Urgency::Normal,
         }

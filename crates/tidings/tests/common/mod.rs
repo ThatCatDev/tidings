@@ -127,6 +127,9 @@ pub trait Notifications {
 
     #[zbus(signal)]
     fn notification_closed(&self, id: u32, reason: u32) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    fn notification_replied(&self, id: u32, text: String) -> zbus::Result<()>;
 }
 
 /// The daemon core on a private bus with a tapped `NullUi` and a fake clock.

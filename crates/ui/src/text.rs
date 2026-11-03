@@ -28,7 +28,15 @@ pub trait TextMeasure {
 
     /// Height of one line of `style`, in logical px.
     fn line_height(&self, style: TextStyle) -> f32;
+
+    /// Where a caret goes before each char of `text` laid out as is on one
+    /// unwrapped line (no trimming or folding), and after the last: one x
+    /// offset per char plus one, the last being the text's width.
+    fn caret_stops(&mut self, text: &str, style: TextStyle) -> Vec<f32>;
 }
+
+/// Wrap width for text that must stay on one line, such as the reply field.
+pub const NO_WRAP: f32 = 100_000.0;
 
 /// Normalises text before shaping: trims, and for single-line styles folds
 /// line breaks and runs of whitespace into single spaces.
@@ -123,6 +131,13 @@ impl TextMeasure for MonoMeasure {
 
     fn line_height(&self, style: TextStyle) -> f32 {
         Type::default().line_height(style)
+    }
+
+    fn caret_stops(&mut self, text: &str, style: TextStyle) -> Vec<f32> {
+        let adv = Self::advance(style);
+        (0..=text.chars().count())
+            .map(|n| crate::geom::u32_to_f32(u32::try_from(n).unwrap_or(u32::MAX)) * adv)
+            .collect()
     }
 }
 

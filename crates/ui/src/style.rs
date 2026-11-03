@@ -41,6 +41,9 @@ pub mod metrics {
     pub const LINE_GAP: f32 = 2.0;
 
     pub const PILL_HEIGHT: f32 = 28.0;
+    /// The inline reply field (a little taller than a button, which sits
+    /// inside it).
+    pub const REPLY_FIELD_HEIGHT: f32 = 34.0;
     pub const PILL_PAD_X: f32 = 12.0;
     pub const ACTION_GAP: f32 = 8.0;
     pub const ACTIONS_PER_ROW: usize = 3;
@@ -312,6 +315,14 @@ pub mod fills {
     pub const CLOSE_BG: Fill = Fill::new(Role::Surface, 0.96);
     pub const CLOSE_BG_HOVER: Fill = Fill::solid(Role::Surface);
     pub const CLOSE_RING: Stroke = Stroke::hairline(Fill::new(Role::Outline, 0.4));
+    /// The reply field: a well a little darker than the card around it.
+    pub const FIELD: Fill = Fill::new(Role::Surface, 0.5);
+    pub const FIELD_RING: Stroke = Stroke::hairline(Fill::new(Role::Outline, 0.35));
+    /// The reply field while it has the keyboard (or the pointer).
+    pub const FIELD_FOCUS: Stroke = Stroke {
+        fill: Fill::new(Role::Primary, 0.9),
+        width: 1.5,
+    };
     /// The panel sheet: the surface at the theme's glass opacity.
     pub const GLASS: Fill = Fill::solid(Role::Glass);
     /// "There are actions inside" dot on a toast's expand button.

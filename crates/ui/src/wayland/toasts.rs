@@ -8,6 +8,7 @@ use tidings_core::view::ToastView;
 use tiny_skia::Pixmap;
 
 use crate::anim::{Timing, ToastMotion};
+use crate::compose::ReplyDraft;
 use crate::geom::{Point, Rect, f32_to_i32};
 use crate::layout::{ToastLayout, layout_toast, stack_offsets};
 use crate::render::{Painter, blit};
@@ -23,7 +24,7 @@ struct Item {
     layout: ToastLayout,
     pixmap: Option<Pixmap>,
     /// Scale and hover the pixmap was rendered for.
-    rendered: Option<(u32, Option<HitTarget>)>,
+    rendered: Option<(u32, Option<HitTarget>, Option<ReplyDraft>)>,
     target_y: f32,
 }
 
@@ -36,6 +37,8 @@ pub struct ToastStack {
     ghosts: Vec<Item>,
     /// Hovered toast and the target under the pointer.
     pub hovered: Option<(NotificationId, HitTarget)>,
+    /// The reply being typed into a toast, if any.
+    pub reply: Option<ReplyDraft>,
 }
 
 impl ToastStack {
@@ -92,12 +95,14 @@ impl ToastStack {
                     Self::new_item(t, scale, hovered.as_ref(), painter)
                 }
             };
-            let key = (scale.to_bits(), hovered.clone());
+            let draft = self.reply.as_ref().filter(|d| d.id == id);
+            let key = (scale.to_bits(), hovered.clone(), draft.cloned());
             if item.rendered.as_ref() != Some(&key) {
                 item.layout = layout_toast(
                     t,
                     scale,
                     hovered.as_ref(),
+                    draft,
                     &painter.style,
                     &mut painter.text,
                 );
@@ -135,7 +140,7 @@ impl ToastStack {
     ) -> Item {
         Item {
             view: t.clone(),
-            layout: layout_toast(t, scale, hovered, &painter.style, &mut painter.text),
+            layout: layout_toast(t, scale, hovered, None, &painter.style, &mut painter.text),
             pixmap: None,
             rendered: None,
             target_y: 0.0,

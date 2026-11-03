@@ -708,6 +708,8 @@ mod tests {
                 key: "a".into(),
                 label: "Open".into(),
             }],
+            reply: None,
+            origin: None,
             clickable: true,
             urgency: Urgency::Normal,
         };

@@ -46,12 +46,20 @@ Dependency direction: `tidings -> {core, gesture, ui}`, `gesture -> core`, `ui -
 ## Behaviour spec
 
 ### Notifications (D-Bus)
-- Spec version 1.2. Capabilities: `actions`, `body`, `body-hyperlinks`, `body-markup`, `icon-static`, `persistence`.
+- Spec version 1.2. Capabilities: `actions`, `body`, `body-hyperlinks`, `body-markup`, `icon-static`, `persistence`, plus KDE's extensions `inline-reply`, `x-kde-reply-placeholder-text` and `x-kde-origin-name` (Chrome uses all three for web notifications; Telegram uses the reply).
 - `Notify` with `replaces_id` replaces in place: same id, card stays put, the toast re-shows.
 - Hints: `urgency`, `image-data`/`image_data`/`icon_data` (iiibiiay → straight RGBA), `image-path`, `desktop-entry`, `transient`, `resident` (don't remove on action).
 - Body markup is reduced to plain text (strip tags, decode entities).
 - Emit `ActionInvoked` and `NotificationClosed` signals with correct reason codes.
+- Inline reply: an `inline-reply` action is not a button but a "Reply" pill, first among the actions (its label from the action, its field's placeholder from `x-kde-reply-placeholder-text`, its send button's from `x-kde-reply-submit-button-text`). Sending emits `NotificationReplied(id, text)`, then the notification goes like after an action (unless `resident`). Only the first `inline-reply` counts.
+- `x-kde-origin-name` (a web notification's site) shows after the app name: "Google Chrome · web.whatsapp.com".
 - `CloseNotification` → reason 3.
+
+### Reply field
+- "Reply" (on a panel card or an expanded toast) swaps the card's buttons for a one-line text field with a send button inside its right end, and takes the keyboard: the surface asks for it exclusively, then drops to on-demand once it has it, so clicking another window takes it away (the caret hides) and clicking the field takes it back.
+- Keys: Enter sends, Esc discards the draft and closes the field, Ctrl+V / Shift+Insert paste (text only), Ctrl+Backspace / Ctrl+W delete a word, Ctrl+U deletes to the start, Ctrl+A / Home and Ctrl+E / End move to the ends, Ctrl+←/→ move by word. Held keys repeat.
+- The text scrolls sideways to keep the caret in view. Line breaks in pasted text become spaces; a reply is at most 4000 chars.
+- A draft survives the field closing (the toast collapsing, the panel opening) until it is sent, discarded, or its notification goes.
 
 ### Toasts
 - Top-right below the bar: top margin 52 logical px, right margin 12, width 360. At most 4 visible, newest on top.

@@ -33,6 +33,11 @@ pub enum UiEvent {
         id: NotificationId,
         key: String,
     },
+    /// The user sent `text` from a card's inline reply field.
+    Reply {
+        id: NotificationId,
+        text: String,
+    },
     Dismiss(NotificationId),
     ClearGroup {
         key: String,
