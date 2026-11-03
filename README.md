@@ -149,6 +149,7 @@ cargo test --workspace          # unit + integration (private dbus-daemon, never
 sh tests/colors.sh              # the Noctalia colours script
 cargo run -p tidings-ui --example demo --release        # UI demo on the live compositor
 cargo run -p tidings-ui --example demo --release -- themes DIR   # render every theme to PNGs
+cargo run -p tidings --example web_notify     # test page for Chrome web notifications (replies, buttons) on localhost:8317
 ```
 
 ## Releases

@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tidings web notifications</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f4f4f6; --card: #ffffff; --text: #1c1c1f; --muted: #6b6b73;
+    --accent: #3b6fd8; --border: #dcdce2; --ok: #237a3b; --warn: #a15c00;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141417; --card: #1e1e23; --text: #ececf0; --muted: #9a9aa5;
+      --accent: #a8c7fa; --border: #33333b; --ok: #7fd18f; --warn: #f0b45a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, sans-serif;
+  }
+  main { max-width: 720px; margin: 0 auto; padding: 32px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p { margin: 0 0 16px; color: var(--muted); }
+  section {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px; margin-bottom: 16px;
+  }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; }
+  button {
+    font: inherit; padding: 8px 14px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--card); }
+  #status { font-weight: 600; }
+  #status.ok { color: var(--ok); }
+  #status.warn { color: var(--warn); }
+  #log {
+    margin: 0; min-height: 120px; max-height: 320px; overflow: auto;
+    font: 13px/1.5 ui-monospace, monospace; white-space: pre-wrap;
+  }
+  code { font: 13px ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Web notification test</h1>
+  <p>Sends Chrome web notifications through a service worker, the same way a site like WhatsApp Web does, so tidings gets the reply field, the buttons and the site name.</p>
+
+  <section>
+    <h2>1. Permission</h2>
+    <div class="row">
+      <button class="primary" id="allow">Allow notifications</button>
+      <span id="status">checking…</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. Send</h2>
+    <div class="row">
+      <button data-kind="reply">Message with Reply</button>
+      <button data-kind="buttons">Two buttons</button>
+      <button data-kind="plain">Plain</button>
+      <button data-kind="sticky">Stays until dismissed</button>
+      <button data-kind="replace">Replace the last one</button>
+      <button data-kind="long">Long text</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>3. What came back</h2>
+    <pre id="log"></pre>
+  </section>
+
+  <p>If the Reply button shows but no text field appears, Chrome has inline replies switched off: enable <code>chrome://flags/#enable-experimental-web-platform-features</code> and relaunch Chrome.</p>
+</main>
+<script>
+  const log = document.getElementById("log");
+  const status = document.getElementById("status");
+
+  function write(line) {
+    const time = new Date().toLocaleTimeString();
+    log.textContent = `${time}  ${line}\n` + log.textContent;
+  }
+
+  function showPermission() {
+    const p = Notification.permission;
+    status.textContent = p === "granted" ? "allowed" : p === "denied" ? "blocked (allow it in the site settings)" : "not asked yet";
+    status.className = p === "granted" ? "ok" : "warn";
+  }
+
+  const ready = navigator.serviceWorker.register("sw.js").then(() => navigator.serviceWorker.ready);
+
+  navigator.serviceWorker.addEventListener("message", ({ data }) => {
+    if (data.kind === "close") {
+      write(`closed       "${data.title}"`);
+    } else if (data.reply !== null) {
+      write(`REPLY        "${data.reply}"  (to "${data.title}")`);
+    } else if (data.action === "reply") {
+      write(`reply button clicked, but no text came back: inline replies look switched off (see below)`);
+    } else if (data.action) {
+      write(`button       "${data.action}"  on "${data.title}"`);
+    } else {
+      write(`clicked      "${data.title}"`);
+    }
+  });
+
+  document.getElementById("allow").addEventListener("click", async () => {
+    await Notification.requestPermission();
+    showPermission();
+  });
+
+  let count = 0;
+  const kinds = {
+    reply: () => ({
+      title: "Ada Lovelace",
+      body: "Are we still on for 6 tonight?",
+      tag: `msg-${++count}`,
+      actions: [
+        { action: "reply", type: "text", title: "Reply", placeholder: "Message Ada…" },
+        { action: "read", title: "Mark as read" },
+      ],
+      requireInteraction: true,
+    }),
+    buttons: () => ({
+      title: "Build finished",
+      body: "tidings passed every check in 2m 14s.",
+      tag: `build-${++count}`,
+      actions: [
+        { action: "open", title: "Open log" },
+        { action: "rerun", title: "Run again" },
+      ],
+    }),
+    plain: () => ({ title: "Hello from the web", body: "A plain web notification.", tag: `plain-${++count}` }),
+    sticky: () => ({
+      title: "Meeting starts now",
+      body: "This stays until you dismiss it (requireInteraction).",
+      tag: `sticky-${++count}`,
+      requireInteraction: true,
+    }),
+    replace: () => ({
+      title: "Download",
+      body: `Updated at ${new Date().toLocaleTimeString()} (same tag, so it replaces in place)`,
+      tag: "download",
+      renotify: true,
+    }),
+    long: () => ({
+      title: "A rather long notification title that should be cut off somewhere sensible",
+      body: "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(6).trim(),
+      tag: `long-${++count}`,
+    }),
+  };
+
+  for (const button of document.querySelectorAll("[data-kind]")) {
+    button.addEventListener("click", async () => {
+      if (Notification.permission !== "granted") {
+        write("allow notifications first (step 1)");
+        return;
+      }
+      const options = kinds[button.dataset.kind]();
+      const reg = await ready;
+      await reg.showNotification(options.title, options);
+      write(`sent         "${options.title}"`);
+    });
+  }
+
+  showPermission();
+</script>
+</body>
+</html>
