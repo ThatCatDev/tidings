@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## [v0.8.0](https://github.com/ThatCatDev/tidings/compare/cb7408feff20c30cce14b14e0b5175a47fa0b64b..v0.8.0) - 2026-11-03
+#### Features
+- run on any layer-shell desktop, with blur and Noctalia colours built in (#4) - ([51a7317](https://github.com/ThatCatDev/tidings/commit/51a731782aaf7fe1c1a64e213ac4b902e71427d2)) - James, Claude Opus 5.5, Claude Opus 5.5, Claude Opus 5.5
+#### Documentation
+- a logo (#3) - ([cb7408f](https://github.com/ThatCatDev/tidings/commit/cb7408feff20c30cce14b14e0b5175a47fa0b64b)) - James, Claude Opus 5.5
+
+- - -
+
 ## [v0.7.0](https://github.com/ThatCatDev/tidings/compare/bfe8985be780485cc4734e749cfa60f33a372e97..v0.7.0) - 2026-11-03
 #### Features
 - install from a release, and a README for users (#2) - ([bfe8985](https://github.com/ThatCatDev/tidings/commit/bfe8985be780485cc4734e749cfa60f33a372e97)) - James, Claude Opus 5.5, Claude Opus 5.5, Claude Opus 5.5, Claude Opus 5.5
