@@ -863,6 +863,73 @@ mod tests {
         assert!(lay.field.is_some_and(|f| f.scroll.abs() < f32::EPSILON));
     }
 
+    /// The field's outline in `scene` (its only `FIELD`-filled rect).
+    fn field_ring(scene: &Scene) -> Option<crate::style::Stroke> {
+        scene.nodes.iter().find_map(|n| match n {
+            Node::RoundRect {
+                fill: Some(f),
+                stroke,
+                ..
+            } if *f == fills::FIELD => *stroke,
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn typed_drafts_are_drawn_scrolled_and_focus_lights_the_ring() {
+        let c = replyable(1);
+        let long = "word ".repeat(40);
+        let typed = draft(1, &long, false);
+        let lay = measure_card(&c, 356.0, 2, Some(&typed), 1.0, &mut MonoMeasure);
+        let f = lay.field.as_ref().unwrap_or_else(|| panic!("field"));
+        let scene = emit(&c, &lay);
+        // The whole draft on one unwrapped line, shifted left by the scroll.
+        let shown = scene.nodes.iter().find_map(|n| match n {
+            Node::Text { rect, text, .. } if *text == long => Some(*rect),
+            _ => None,
+        });
+        let rect = shown.unwrap_or_else(|| panic!("draft text"));
+        assert!((rect.x - (f.text_area.x - f.scroll)).abs() < 1e-4);
+        assert!(f.scroll > 0.0);
+        assert_eq!(field_ring(&scene), Some(fills::FIELD_RING), "not focused");
+
+        let focused = draft(1, "hi", true);
+        let lay = measure_card(&c, 356.0, 2, Some(&focused), 1.0, &mut MonoMeasure);
+        assert_eq!(field_ring(&emit(&c, &lay)), Some(fills::FIELD_FOCUS));
+    }
+
+    #[test]
+    fn critical_cards_are_outlined_and_hover_lights_the_close_button() {
+        let mut c = sample_card(1, "Mail");
+        c.urgency = Urgency::Critical;
+        let lay = measure_card(&c, 356.0, 2, None, 1.0, &mut MonoMeasure);
+        let style = Style::default();
+        let close = HitTarget::Dismiss(c.id);
+        let opts = CardOpts {
+            style: &style,
+            body_target: HitTarget::Activate(c.id),
+            close_target: close.clone(),
+            hovered: true,
+            hovered_target: Some(close.clone()),
+        };
+        let mut scene = Scene::new(crate::geom::Size::new(400.0, 400.0));
+        let clip = Rect::new(0.0, 0.0, 400.0, 400.0);
+        emit_card(&mut scene, &c, &lay, Point::new(10.0, 10.0), &opts, clip);
+        assert!(matches!(
+            scene.nodes.first(),
+            Some(Node::RoundRect { stroke: Some(s), .. }) if *s == style.critical
+        ));
+        assert!(scene.nodes.iter().any(|n| matches!(
+            n,
+            Node::Circle { fill, .. } if *fill == fills::CLOSE_BG_HOVER
+        )));
+        assert!(scene.nodes.iter().any(|n| matches!(
+            n,
+            Node::Glyph { kind: GlyphKind::Close, fill, .. } if *fill == Fill::solid(Role::OnSurface)
+        )));
+        assert_eq!(scene.hits.last().map(|h| &h.target), Some(&close), "on top");
+    }
+
     #[test]
     fn fallback_letter_is_uppercase_alnum() {
         assert_eq!(fallback_letter("  firefox"), 'F');

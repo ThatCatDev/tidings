@@ -336,17 +336,27 @@ mod tests {
         assert_eq!(evdev_ioctl(IOC_WRITE, 0xa0, 4), 0x4004_45a0);
     }
 
+    /// The kernel's encoding of an event: `secs.micros`, type, code, value.
+    fn raw_event(secs: i64, micros: i64, kind: u16, code: u16, value: i32) -> [u8; EVENT_SIZE] {
+        let mut b = [0u8; EVENT_SIZE];
+        b[0..8].copy_from_slice(&secs.to_ne_bytes());
+        b[8..16].copy_from_slice(&micros.to_ne_bytes());
+        b[16..18].copy_from_slice(&kind.to_ne_bytes());
+        b[18..20].copy_from_slice(&code.to_ne_bytes());
+        b[20..24].copy_from_slice(&value.to_ne_bytes());
+        b
+    }
+
     #[test]
     fn parses_input_events() {
-        let mut b = [0u8; EVENT_SIZE];
-        b[0..8].copy_from_slice(&5i64.to_ne_bytes());
-        b[8..16].copy_from_slice(&250_000i64.to_ne_bytes());
-        b[16..18].copy_from_slice(&3u16.to_ne_bytes());
-        b[18..20].copy_from_slice(&0x35u16.to_ne_bytes());
-        b[20..24].copy_from_slice(&(-6046i32).to_ne_bytes());
         assert_eq!(
-            parse_event(&b),
+            parse_event(&raw_event(5, 250_000, 3, 0x35, -6046)),
             InputEvent::new(Duration::from_millis(5250), 3, 0x35, -6046)
+        );
+        // A timestamp before the epoch (never seen in practice) reads as zero.
+        assert_eq!(
+            parse_event(&raw_event(-1, -1, 0, 0, 0)).time,
+            Duration::ZERO
         );
     }
 
@@ -354,6 +364,100 @@ mod tests {
     fn open_reports_missing_node() {
         let err = EvdevDevice::open(Path::new("/nonexistent/event0")).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    }
+
+    /// A named pipe standing in for an event node: the kernel side writes
+    /// events into it, the device reads them out.
+    fn fifo(path: &Path) {
+        let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: `c_path` is a valid NUL-terminated string that outlives the call.
+        let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
+        assert_eq!(rc, 0, "mkfifo: {}", io::Error::last_os_error());
+    }
+
+    #[test]
+    fn ioctls_on_a_non_evdev_node_are_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("event0");
+        fs::write(&path, b"").unwrap();
+        let device = EvdevDevice::open(&path).unwrap();
+        let not_tty = Some(libc::ENOTTY);
+        assert_eq!(
+            device
+                .abs_range(ABS_MT_POSITION_X)
+                .unwrap_err()
+                .raw_os_error(),
+            not_tty
+        );
+        assert_eq!(
+            device.use_monotonic_clock().unwrap_err().raw_os_error(),
+            not_tty
+        );
+    }
+
+    #[test]
+    fn opener_reports_a_node_that_is_not_an_input_device() {
+        let dir = tempfile::tempdir().unwrap();
+        let (sys, dev) = (dir.path().join("sys"), dir.path().join("dev"));
+        fake_device(&sys, "event8", "Magic Trackpad", "1", "67f800001000003");
+        fs::create_dir_all(&dev).unwrap();
+        fs::write(dev.join("event8"), b"").unwrap();
+        let mut opener = TrackpadOpener::new(sys, dev);
+        let err = opener.open().unwrap_err();
+        assert_eq!(
+            err.raw_os_error(),
+            Some(libc::ENOTTY),
+            "found and opened: {err}"
+        );
+    }
+
+    #[test]
+    fn reads_whole_events_until_the_writer_goes_away() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("event0");
+        fifo(&path);
+        let mut device = EvdevDevice::open(&path).unwrap();
+        let mut writer = OpenOptions::new().write(true).open(&path).unwrap();
+        let mut out = Vec::new();
+
+        // Nothing written yet: the wait times out with nothing read.
+        device.read_events(Duration::ZERO, &mut out).unwrap();
+        assert_eq!(out, []);
+
+        let mut bytes = raw_event(1, 0, 3, 0x35, 100).to_vec();
+        bytes.extend(raw_event(1, 500, 0, 0, 0));
+        io::Write::write_all(&mut writer, &bytes).unwrap();
+        device
+            .read_events(Duration::from_secs(5), &mut out)
+            .unwrap();
+        assert_eq!(
+            out,
+            [
+                InputEvent::new(Duration::from_secs(1), 3, 0x35, 100),
+                InputEvent::new(Duration::from_micros(1_000_500), 0, 0, 0),
+            ]
+        );
+
+        // The device went away (unplugged): an error, so the reader reconnects.
+        drop(writer);
+        let err = device
+            .read_events(Duration::from_secs(5), &mut out)
+            .unwrap_err();
+        assert_eq!(err.raw_os_error(), Some(libc::ENODEV));
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn end_of_file_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("event0");
+        fs::write(&path, raw_event(2, 0, 3, 0x36, 7)).unwrap();
+        let mut device = EvdevDevice::open(&path).unwrap();
+        let mut out = Vec::new();
+        device.read_events(Duration::ZERO, &mut out).unwrap();
+        assert_eq!(out, [InputEvent::new(Duration::from_secs(2), 3, 0x36, 7)]);
+        let err = device.read_events(Duration::ZERO, &mut out).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
     }
 
     /// Hardware check: `cargo test -p tidings-gesture -- --ignored`.

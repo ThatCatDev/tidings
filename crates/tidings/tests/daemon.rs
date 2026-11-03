@@ -515,3 +515,139 @@ async fn shutdown_releases_name_and_socket() {
     let (again, _ui) = start_daemon(cfg, &FakeClock::at_unix(0)).await.unwrap();
     again.shutdown().await;
 }
+
+#[tokio::test]
+async fn ui_events_reach_the_actor_and_shutdown_finishes_it() {
+    let bus = common::PrivateBus::start();
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = config(&bus, dir.path());
+    // No colours file: the built-in colours, nothing watched.
+    cfg.colors_path = None;
+    let socket = cfg.socket_path.clone();
+    let (ui_events_tx, ui_events) = std::sync::mpsc::channel();
+    let daemon = tidings::daemon::Daemon::start(
+        cfg,
+        std::sync::Arc::new(FakeClock::at_unix(0)),
+        Box::new(move |events| {
+            ui_events_tx.send(events).unwrap();
+            Ok(Box::new(tidings::null_ui::NullUi::new()))
+        }),
+    )
+    .await
+    .unwrap();
+    assert!(
+        daemon.connection().unique_name().is_some(),
+        "connected to the bus"
+    );
+
+    // The UI reports a click on its own thread; the actor sees it.
+    let ui = ui_events.recv().unwrap();
+    ui.send(UiEvent::ToggleDnd).unwrap();
+    let dnd = || {
+        let socket = socket.clone();
+        tokio::task::spawn_blocking(move || {
+            tidings::ipc::client::send(&socket, Request::Dnd(None)).unwrap()
+        })
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while dnd().await.unwrap() != Response::Ok(Some("on".into())) {
+        assert!(tokio::time::Instant::now() < deadline, "DnD never toggled");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    assert!(!daemon.is_finished());
+    daemon.events().send(AppEvent::Shutdown).unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !daemon.is_finished() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "actor still running"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn gestures_on_without_a_trackpad_still_serve() {
+    let bus = common::PrivateBus::start();
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = config(&bus, dir.path());
+    // `config` points the trackpad search at empty folders.
+    cfg.settings.gestures.enabled = true;
+    let socket = cfg.socket_path.clone();
+    let (daemon, _ui) = start_daemon(cfg, &FakeClock::at_unix(0)).await.unwrap();
+    let ctl = |request| {
+        let socket = socket.clone();
+        tokio::task::spawn_blocking(move || tidings::ipc::client::send(&socket, request).unwrap())
+    };
+    // Opening the panel tells the (waiting) gesture reader.
+    assert_eq!(ctl(Request::Open).await.unwrap(), Response::Ok(None));
+    assert_eq!(
+        ctl(Request::IsOpen).await.unwrap(),
+        Response::Ok(Some("true".into()))
+    );
+    // Shutdown stops the reader thread too.
+    tokio::time::timeout(Duration::from_secs(5), daemon.shutdown())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_ui_that_fails_to_start_stops_the_daemon_cleanly() {
+    let bus = common::PrivateBus::start();
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = config(&bus, dir.path());
+    let socket = cfg.socket_path.clone();
+    let result = tidings::daemon::Daemon::start(
+        cfg,
+        std::sync::Arc::new(FakeClock::at_unix(0)),
+        Box::new(|_events| Err("no compositor".into())),
+    )
+    .await;
+    let Err(err @ DaemonError::Ui(_)) = result else {
+        panic!("expected a UI error, got {result:?}");
+    };
+    assert_eq!(err.to_string(), "cannot start the UI: no compositor");
+    assert!(!socket.exists(), "socket removed");
+    // Bus name and socket are free for the next attempt.
+    let (again, _ui) = start_daemon(config(&bus, dir.path()), &FakeClock::at_unix(0))
+        .await
+        .unwrap();
+    again.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_live_socket_is_never_taken_over() {
+    let t = TestDaemon::start().await;
+    // Another bus, so the name is free, but the same socket.
+    let other_bus = common::PrivateBus::start();
+    let mut cfg = config(&other_bus, t.dir.path());
+    cfg.socket_path.clone_from(&t.socket);
+    let result = start_daemon(cfg, &FakeClock::at_unix(0)).await;
+    assert!(
+        matches!(&result, Err(DaemonError::Ipc(_))),
+        "{:?}",
+        result.err()
+    );
+    assert_eq!(
+        t.value(Request::Count).await,
+        "0",
+        "the first still answers"
+    );
+    t.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_unreachable_bus_is_a_bus_error() {
+    let bus = common::PrivateBus::start();
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = config(&bus, dir.path());
+    cfg.bus =
+        tidings::daemon::Bus::Address(format!("unix:path={}", dir.path().join("no-bus").display()));
+    let result = start_daemon(cfg, &FakeClock::at_unix(0)).await;
+    let Err(err @ DaemonError::Bus(_)) = result else {
+        panic!("expected a bus error, got {:?}", result.err());
+    };
+    assert!(err.to_string().starts_with("D-Bus: "), "{err}");
+}

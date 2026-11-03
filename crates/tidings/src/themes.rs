@@ -234,4 +234,42 @@ mod tests {
         };
         assert!(matches!(parse(&src), Err(LoadError::Invalid { .. })));
     }
+
+    #[test]
+    fn an_unreadable_theme_file_falls_back_and_is_reported() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let d = dir.path();
+        // A directory where the theme file should be.
+        std::fs::create_dir(d.join("odd.toml")).unwrap_or_else(|e| panic!("{e}"));
+        assert!(matches!(
+            find("odd", Some(d)),
+            Err(LoadError::Io { path, .. }) if path == d.join("odd.toml")
+        ));
+        let look = resolve(
+            &config("[theme]\nname = \"odd\"\n[theme.card]\nradius = 5\n"),
+            Some(d),
+        );
+        assert!((look.card.radius - 5.0).abs() < f32::EPSILON);
+        assert_eq!(look.panel, Look::default().panel);
+    }
+
+    #[test]
+    fn builtin_sources_are_named_by_their_theme() {
+        let Ok(Some(src)) = find("nord", None) else {
+            panic!("nord is built in");
+        };
+        assert_eq!(src.origin, Origin::Builtin);
+        assert_eq!(src.display_path(), PathBuf::from("builtin:nord"));
+        assert!(parse(&src).is_ok());
+    }
+
+    #[test]
+    fn list_skips_files_whose_names_are_not_text() {
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let name = std::ffi::OsStr::from_bytes(b"\xff.toml");
+        std::fs::write(dir.path().join(name), "").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(list(Some(dir.path())), list(None));
+    }
 }

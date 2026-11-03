@@ -79,7 +79,9 @@ impl App {
             self.close_reply();
         }
         self.replies.drafts.entry(id).or_default();
-        let focused = self.replies.open.is_some_and(|o| o.focused);
+        // The surface may have the keyboard already (the panel does once
+        // clicked), in which case no focus event is coming.
+        let focused = self.keyboard_on == Some(surface);
         self.replies.open = Some(OpenReply {
             id,
             surface,
@@ -102,8 +104,13 @@ impl App {
         self.reply_changed();
     }
 
-    /// Closes the field if it is open on `surface` (which is going away).
+    /// `surface` is going away: closes the field if it is open there, and
+    /// forgets that it had the keyboard (its leave event may never arrive
+    /// once the surface is gone).
     pub(super) fn close_reply_on(&mut self, surface: SurfaceId) {
+        if self.keyboard_on == Some(surface) {
+            self.keyboard_on = None;
+        }
         if self.replies.open.is_some_and(|o| o.surface == surface) {
             self.close_reply();
         }

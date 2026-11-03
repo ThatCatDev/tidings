@@ -1,0 +1,95 @@
+name: coverage
+
+# Measures test coverage. On a pull request it also measures the base branch
+# and posts the comparison as a comment (updated in place on every push);
+# on main it only writes the job summary.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # The UI's end-to-end tests fail rather than skip without a compositor.
+  TIDINGS_REQUIRE_COMPOSITOR: "1"
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: System libraries
+        # The same as ci.yml: the UI crate's libraries and dbus-daemon for
+        # the integration tests, and the end-to-end UI tests' compositor.
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev dbus sway wtype wl-clipboard grim
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Coverage
+        run: |
+          cargo llvm-cov --workspace --json --summary-only --output-path head.json
+          # A browsable report with every uncovered line, from the same run.
+          cargo llvm-cov report --html --output-dir coverage-html
+
+      - name: Coverage of the base branch
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git worktree add ../base "$BASE_SHA"
+          git diff --name-only "$BASE_SHA" HEAD > changed.txt
+          # Sharing the target directory reuses the compiled dependencies.
+          # A base that cannot be measured just leaves the comparison out.
+          (cd ../base && CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" \
+            cargo llvm-cov --workspace --json --summary-only \
+            --output-path "$GITHUB_WORKSPACE/base.json") || rm -f base.json
+
+      - name: Report
+        run: |
+          if [ -f base.json ]; then
+            scripts/coverage.sh report head.json base.json changed.txt > report.md
+          else
+            scripts/coverage.sh report head.json > report.md
+          fi
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: coverage-html
+
+      - name: Comment on the pull request
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Update this workflow's earlier comment (found by the report's
+          # hidden marker) rather than adding one per push.
+          id=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+            --jq '.[] | select(.user.login == "github-actions[bot]")
+                      | select(.body | startswith("<!-- tidings-coverage -->")) | .id' | head -n 1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$id" -F body=@report.md > /dev/null
+          else
+            gh pr comment "$PR" --repo "$REPO" --body-file report.md
+          fi
+
+      - name: Every file at least 80% covered
+        # Last, so the report and the comment are there even when it fails.
+        run: scripts/coverage.sh check head.json

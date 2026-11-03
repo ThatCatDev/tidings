@@ -201,9 +201,12 @@ impl PanelView {
 #[cfg(test)]
 mod tests {
     use std::sync::{Mutex, OnceLock};
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
+
+    use tidings_core::view::GroupView;
 
     use super::*;
+    use crate::layout::tests::sample_card;
 
     fn painter() -> std::sync::MutexGuard<'static, Painter> {
         static P: OnceLock<Mutex<Painter>> = OnceLock::new();
@@ -241,6 +244,137 @@ mod tests {
         assert!((r.x - 194.0).abs() < 0.01 && (r.w - 194.0).abs() < 0.01);
         assert_eq!(p.hit(Point::new(100.0, 200.0)), None);
         assert_eq!(p.hit(Point::new(300.0, 300.0)), Some(HitTarget::Background));
+    }
+
+    fn group(key: &str, ids: &[u32], expanded: bool) -> GroupView {
+        GroupView {
+            key: key.into(),
+            app_name: key.into(),
+            icon: None,
+            cards: ids.iter().map(|&i| sample_card(i, key)).collect(),
+            expanded,
+        }
+    }
+
+    fn view(groups: Vec<GroupView>) -> ViewModel {
+        ViewModel {
+            groups,
+            toasts: Vec::new(),
+            dnd: false,
+        }
+    }
+
+    /// An open panel refreshed once with `view` at scale 1.
+    fn open_panel(view: &ViewModel, now: Instant) -> PanelView {
+        let mut p = PanelView::new(Timing::default());
+        p.motion.track(1.0, now);
+        p.refresh(view, &mut painter(), &Palette::default(), 400.0, 1.0, now);
+        p
+    }
+
+    fn whole(p: &mut PanelView) -> Vec<PxRect> {
+        p.compose(1.0, (388, 400))
+            .map(|(_, d)| d)
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn a_new_panel_is_closed_and_inert() {
+        let mut p = PanelView::new(Timing::default());
+        assert!(
+            (p.offset() - SURFACE_WIDTH).abs() < f32::EPSILON,
+            "slid out"
+        );
+        assert!((p.input_rect(400.0).w).abs() < f32::EPSILON);
+        assert_eq!(p.hit(Point::new(300.0, 100.0)), None, "nothing laid out");
+        assert!(p.compose(1.0, (388, 400)).is_none(), "nothing painted");
+        assert!(!p.scroll_by(10.0), "nothing to scroll");
+        assert!(!p.is_animating(Instant::now()));
+    }
+
+    #[test]
+    fn refresh_repaints_only_when_something_changed() {
+        let now = Instant::now();
+        let v = view(vec![group("Mail", &[1], false)]);
+        let mut p = open_panel(&v, now);
+        let full = vec![PxRect {
+            x: 0,
+            y: 0,
+            w: 388,
+            h: 400,
+        }];
+        assert_eq!(whole(&mut p), full, "first frame");
+        let mut painter = painter();
+        let palette = Palette::default();
+
+        // Nothing changed: no layout, no paint, no damage.
+        p.refresh(&v, &mut painter, &palette, 400.0, 1.0, now);
+        assert_eq!(whole(&mut p), vec![]);
+
+        // Re-laid out to the same scene: still nothing to repaint.
+        p.needs_layout = true;
+        p.refresh(&v, &mut painter, &palette, 400.0, 1.0, now);
+        assert!(!p.needs_layout);
+        assert_eq!(whole(&mut p), vec![]);
+
+        // A theme change repaints the whole sheet.
+        p.invalidate_paint();
+        p.refresh(&v, &mut painter, &palette, 400.0, 1.0, now);
+        let damage = whole(&mut p);
+        assert_eq!(damage.len(), 1);
+        assert!(damage[0].w >= 380 && damage[0].h == 400, "{damage:?}");
+    }
+
+    #[test]
+    fn unmapping_forgets_the_surface_state() {
+        let now = Instant::now();
+        let mut p = open_panel(&view(vec![group("Mail", &[1], false)]), now);
+        p.ui.hovered = Some(HitTarget::ClearAll);
+        assert!(p.hit(Point::new(200.0, 200.0)).is_some());
+        p.reset_surface_state();
+        assert_eq!(p.ui, Interaction::default());
+        assert_eq!(p.hit(Point::new(200.0, 200.0)), None);
+        assert!(p.compose(1.0, (388, 400)).is_none());
+    }
+
+    #[test]
+    fn scrolling_is_clamped_to_the_content() {
+        let now = Instant::now();
+        let groups = (0..12)
+            .map(|i| group(&format!("App {i}"), &[i], false))
+            .collect();
+        let mut p = open_panel(&view(groups), now);
+        assert!(p.scroll_by(50.0));
+        assert!(p.needs_layout);
+        assert!((p.ui.scroll - 50.0).abs() < f32::EPSILON);
+        // Past the top stops at the top; already there, nothing moves.
+        assert!(p.scroll_by(-1000.0));
+        assert!(p.ui.scroll.abs() < f32::EPSILON);
+        assert!(!p.scroll_by(-10.0));
+        // Past the end stops at the end.
+        assert!(p.scroll_by(1e6));
+        let max = p.ui.scroll;
+        assert!(max > 0.0 && max < 1e6);
+        assert!(!p.scroll_by(1.0));
+    }
+
+    #[test]
+    fn expanding_a_group_morphs_over_several_frames() {
+        let t0 = Instant::now();
+        let mut p = open_panel(&view(vec![group("Mail", &[1, 2, 3], false)]), t0);
+        assert!(!p.is_animating(t0));
+        let mut painter = painter();
+        let palette = Palette::default();
+        let expanded = view(vec![group("Mail", &[1, 2, 3], true)]);
+        p.refresh(&expanded, &mut painter, &palette, 400.0, 1.0, t0);
+        let mid = t0 + Duration::from_millis(100);
+        assert!(p.is_animating(mid));
+        p.refresh(&expanded, &mut painter, &palette, 400.0, 1.0, mid);
+        assert_eq!(p.ui.morph.len(), 1, "mid-morph: {:?}", p.ui.morph);
+        let end = t0 + Duration::from_secs(2);
+        assert!(!p.is_animating(end));
+        p.refresh(&expanded, &mut painter, &palette, 400.0, 1.0, end);
+        assert!(p.ui.morph.is_empty(), "settled");
     }
 
     #[test]

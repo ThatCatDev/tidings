@@ -643,6 +643,32 @@ mod tests {
     }
 
     #[test]
+    fn every_theme_paint_is_the_role_of_the_same_colour() {
+        let p = Palette::default();
+        let fixed = Paint::Fixed(Rgb(7, 8, 9));
+        for paint in [
+            Paint::Surface,
+            Paint::SurfaceVariant,
+            Paint::OnSurface,
+            Paint::OnSurfaceVariant,
+            Paint::Primary,
+            Paint::OnPrimary,
+            Paint::Error,
+            Paint::Outline,
+            Paint::Tint,
+            fixed,
+        ] {
+            assert_eq!(
+                p.rgb(Role::from(paint)),
+                paint.resolve(p.theme()),
+                "{paint:?}"
+            );
+        }
+        // Glass is the surface colour (its alpha is the theme's).
+        assert_eq!(p.rgb(Role::Glass), p.theme().surface);
+    }
+
+    #[test]
     fn tint_follows_mode() {
         let mut theme = default_theme();
         assert_eq!(

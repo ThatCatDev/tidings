@@ -104,3 +104,111 @@ async fn handle(stream: UnixStream, events: AppSender) -> io::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use tokio::io::AsyncReadExt as _;
+    use tokio::sync::mpsc;
+
+    use super::*;
+
+    /// Sends `bytes` on a fresh connection and returns everything the server
+    /// writes back before it closes the connection.
+    async fn exchange(path: &Path, bytes: &[u8]) -> String {
+        let mut stream = UnixStream::connect(path).await.unwrap();
+        stream.write_all(bytes).await.unwrap();
+        stream.shutdown().await.unwrap();
+        let mut reply = String::new();
+        tokio::time::timeout(Duration::from_secs(5), stream.read_to_string(&mut reply))
+            .await
+            .unwrap()
+            .unwrap();
+        reply
+    }
+
+    #[tokio::test]
+    async fn bind_replaces_a_stale_socket_but_not_a_live_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.sock");
+        // A socket file left behind by a daemon that died: nobody listens.
+        drop(std::os::unix::net::UnixListener::bind(&path).unwrap());
+        assert!(path.exists());
+        let server = IpcServer::bind(&path).await.unwrap();
+
+        let err = IpcServer::bind(&path).await.unwrap_err();
+        assert!(matches!(&err, BindError::InUse(p) if *p == path), "{err}");
+        assert!(path.exists(), "the live socket is kept");
+
+        drop(server);
+        assert!(!path.exists(), "dropping the server removes its socket");
+    }
+
+    #[tokio::test]
+    async fn bind_reports_an_unusable_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing").join("t.sock");
+        let err = IpcServer::bind(&path).await.unwrap_err();
+        assert!(
+            matches!(&err, BindError::Io { path: p, .. } if *p == path),
+            "{err}"
+        );
+        assert!(err.to_string().starts_with("cannot bind "), "{err}");
+    }
+
+    #[tokio::test]
+    async fn requests_are_answered_in_order_and_bad_ones_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.sock");
+        let server = IpcServer::bind(&path).await.unwrap();
+        let (events, mut rx) = mpsc::unbounded_channel();
+        let serving = tokio::spawn(server.serve(events));
+        let actor = tokio::spawn(async move {
+            while let Some(event) = rx.recv().await {
+                if let AppEvent::Ipc(request, reply) = event {
+                    let _ = reply.send(Response::Ok(Some(request.to_string())));
+                }
+            }
+        });
+
+        let reply = exchange(&path, b"count\nbogus\ndnd on\n").await;
+        assert!(
+            reply.starts_with("ok count\nerr ") && reply.ends_with("\nok dnd on\n"),
+            "{reply:?}"
+        );
+        // A line that is not text ends that connection, not the server.
+        assert_eq!(exchange(&path, b"\xff\xfe\n").await, "");
+        assert_eq!(exchange(&path, b"is-open\n").await, "ok is-open\n");
+
+        serving.abort();
+        actor.abort();
+    }
+
+    #[tokio::test]
+    async fn requests_during_shutdown_get_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.sock");
+        let server = IpcServer::bind(&path).await.unwrap();
+        let (events, mut rx) = mpsc::unbounded_channel();
+        let serving = tokio::spawn(server.serve(events));
+
+        // The actor takes the request but stops before answering it.
+        let (reply, ()) = tokio::join!(exchange(&path, b"count\n"), async {
+            drop(rx.recv().await);
+        });
+        assert_eq!(reply, "err daemon is shutting down\n");
+
+        // The actor is gone: requests are refused, and the server stops
+        // after that connection.
+        drop(rx);
+        assert_eq!(
+            exchange(&path, b"count\n").await,
+            "err daemon is shutting down\n"
+        );
+        tokio::time::timeout(Duration::from_secs(5), serving)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+}

@@ -249,6 +249,7 @@ impl Canvas {
 
     /// Restricts input to `rects` (logical px). An empty list means no input.
     pub fn set_input(&self, compositor: &CompositorState, rects: &[Rect]) {
+        log::trace!("tidings-ui: input region of {:?}: {rects:?}", self.id);
         match Region::new(compositor) {
             Ok(region) => {
                 for r in rects {

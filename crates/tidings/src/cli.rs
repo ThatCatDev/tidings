@@ -193,6 +193,12 @@ mod tests {
         assert_eq!(ctl(&["count"]), Request::Count);
         assert_eq!(ctl(&["is-open"]), Request::IsOpen);
         assert_eq!(ctl(&["dnd"]), Request::Dnd(None));
+        assert_eq!(ctl(&["dnd", "on"]), Request::Dnd(Some(DndChange::On)));
+        assert_eq!(ctl(&["dnd", "off"]), Request::Dnd(Some(DndChange::Off)));
+        assert_eq!(
+            ctl(&["gesture", "begin", "open"]),
+            Request::Gesture(GestureEvent::Begin(GestureKind::Open))
+        );
         assert_eq!(
             ctl(&["dnd", "toggle"]),
             Request::Dnd(Some(DndChange::Toggle))

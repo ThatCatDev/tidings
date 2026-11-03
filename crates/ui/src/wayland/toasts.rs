@@ -296,6 +296,93 @@ mod tests {
     }
 
     #[test]
+    fn hovering_rerenders_the_toast_and_ends_when_it_goes() {
+        let mut s = ToastStack::new(Timing::default());
+        assert!(s.is_empty());
+        let mut painter = painter();
+        let palette = Palette::default();
+        let t0 = Instant::now();
+        s.sync(&[toast(1)], &mut painter, &palette, 1.0, t0);
+        let before = s.items[0].pixmap.clone();
+        let hover = Some((NotificationId(1), HitTarget::Activate(NotificationId(1))));
+        assert!(s.set_hover(hover.clone(), &mut painter, &palette, 1.0, t0));
+        assert!(
+            !s.set_hover(hover.clone(), &mut painter, &palette, 1.0, t0),
+            "no change"
+        );
+        assert_eq!(s.hovered, hover);
+        assert_ne!(s.items[0].pixmap, before, "hover tints the glass");
+        assert_eq!(s.items.len(), 1);
+        // The hovered toast is gone, so nothing is hovered.
+        s.sync(&[], &mut painter, &palette, 1.0, t0);
+        assert_eq!(s.hovered, None);
+    }
+
+    #[test]
+    fn a_changed_toast_is_laid_out_again_in_place() {
+        let mut s = ToastStack::default();
+        let mut painter = painter();
+        let palette = Palette::default();
+        let t0 = Instant::now();
+        s.sync(&[toast(1)], &mut painter, &palette, 1.0, t0);
+        let later = t0 + Duration::from_secs(1);
+        let compact = s.needed_height(later);
+        let expanded = ToastView {
+            expanded: true,
+            ..toast(1)
+        };
+        s.sync(
+            std::slice::from_ref(&expanded),
+            &mut painter,
+            &palette,
+            1.0,
+            later,
+        );
+        assert_eq!(s.items.len(), 1);
+        assert!(s.ghosts.is_empty(), "replaced, not removed");
+        assert_eq!(s.items[0].view, expanded);
+        let settled = later + Duration::from_secs(1);
+        assert!(
+            s.needed_height(settled) > compact + 20.0,
+            "expanded is taller"
+        );
+    }
+
+    #[test]
+    fn invalidated_toasts_are_rendered_again() {
+        let mut s = ToastStack::default();
+        let mut painter = painter();
+        let palette = Palette::default();
+        let t0 = Instant::now();
+        s.sync(&[toast(2), toast(1)], &mut painter, &palette, 1.0, t0);
+        s.sync(&[toast(2)], &mut painter, &palette, 1.0, t0);
+        assert_eq!((s.items.len(), s.ghosts.len()), (1, 1));
+        s.invalidate_paint();
+        assert!(
+            s.items
+                .iter()
+                .chain(&s.ghosts)
+                .all(|i| i.rendered.is_none())
+        );
+        s.sync(&[toast(2)], &mut painter, &palette, 1.0, t0);
+        assert!(s.items[0].rendered.is_some() && s.items[0].pixmap.is_some());
+    }
+
+    #[test]
+    fn a_returning_toast_replaces_its_fading_ghost() {
+        let mut s = ToastStack::default();
+        let mut painter = painter();
+        let palette = Palette::default();
+        let t0 = Instant::now();
+        s.sync(&[toast(1)], &mut painter, &palette, 1.0, t0);
+        s.sync(&[], &mut painter, &palette, 1.0, t0);
+        assert_eq!(s.ghosts.len(), 1);
+        s.sync(&[toast(1)], &mut painter, &palette, 1.0, t0);
+        assert!(s.ghosts.is_empty());
+        assert_eq!(s.items.len(), 1);
+    }
+
+    #[test]
     fn removed_toast_fades_out_then_disappears() {
         let mut s = ToastStack::default();
         let mut painter = painter();

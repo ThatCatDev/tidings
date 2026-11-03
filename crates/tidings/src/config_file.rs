@@ -176,5 +176,30 @@ mod tests {
 
         std::fs::write(&path, "[toasts]\nmax_visible = 2\n").unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(load(&path).map(|c| c.toasts.max_visible).ok(), Some(2));
+        assert_eq!(load_or_default(Some(&path)).toasts.max_visible, 2);
+    }
+
+    #[test]
+    fn unreadable_or_absent_files_give_the_defaults() {
+        assert_eq!(load_or_default(None), Config::default());
+        // A directory where the file should be.
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let err = load(dir.path()).err();
+        assert!(
+            matches!(&err, Some(LoadError::Io { path, .. }) if path == dir.path()),
+            "{err:?}"
+        );
+        assert_eq!(load_or_default(Some(dir.path())), Config::default());
+    }
+
+    #[test]
+    fn errors_without_a_key_have_no_key_prefix() {
+        let errors = Config::from_toml("[toasts\n").err();
+        let Some(errors) = errors else {
+            panic!("a syntax error");
+        };
+        let lines = describe(Path::new("c.toml"), &errors);
+        assert!(lines[0].starts_with("c.toml:1:"), "{lines:?}");
+        assert!(!lines[0].contains("toasts: "), "{lines:?}");
     }
 }

@@ -691,6 +691,23 @@ mod tests {
     }
 
     #[test]
+    fn a_finger_that_paused_has_no_momentum() {
+        let t0 = Instant::now();
+        let mut paused = PanelMotion::default();
+        paused.track(0.3, t0);
+        paused.track(0.5, t0 + ms(16));
+        // Held still for a while before the last sample.
+        paused.track(0.7, t0 + ms(300));
+        paused.animate_to(1.0, t0 + ms(310));
+        let mut still = PanelMotion::default();
+        still.track(0.7, t0);
+        still.animate_to(1.0, t0 + ms(10));
+        let a = paused.step(t0 + ms(326)).openness;
+        let b = still.step(t0 + ms(26)).openness;
+        assert!((a - b).abs() < 1e-6, "{a} vs {b}");
+    }
+
+    #[test]
     fn animate_to_current_rest_settles_immediately() {
         let mut p = PanelMotion::default();
         assert_eq!(p.animate_to(0.0, Instant::now()), Some(false));

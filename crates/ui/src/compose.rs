@@ -376,6 +376,14 @@ mod tests {
         );
         assert_eq!(cmd(Keysym::V, None, ctrl), Some(KeyCommand::Paste));
         assert_eq!(cmd(Keysym::Insert, None, shift), Some(KeyCommand::Paste));
+        assert_eq!(cmd(Keysym::Delete, None, none), edit(Edit::Delete));
+        assert_eq!(cmd(Keysym::KP_Left, None, none), edit(Edit::Left));
+        assert_eq!(cmd(Keysym::Up, None, none), edit(Edit::Home));
+        assert_eq!(cmd(Keysym::End, None, none), edit(Edit::End));
+        assert_eq!(cmd(Keysym::Down, None, none), edit(Edit::End));
+        // Readline's Ctrl+A / Ctrl+E, in either case.
+        assert_eq!(cmd(Keysym::A, None, ctrl), edit(Edit::Home));
+        assert_eq!(cmd(Keysym::e, None, ctrl), edit(Edit::End));
         assert_eq!(cmd(Keysym::u, None, ctrl), edit(Edit::DeleteToStart));
         assert_eq!(cmd(Keysym::w, None, ctrl), edit(Edit::DeleteWordBack));
         // Other shortcuts and bare modifiers do nothing.

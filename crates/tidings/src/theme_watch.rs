@@ -93,6 +93,23 @@ mod tests {
         std::fs::write(&path, r##"{"mode":"light","primary":"#112233"}"##).unwrap();
         let t = load_theme(&path);
         assert_eq!((t.mode, t.primary), (Mode::Light, Rgb(0x11, 0x22, 0x33)));
+        // Unreadable (here a directory): defaults too.
+        assert_eq!(load_theme(dir.path()), Theme::default());
+    }
+
+    #[tokio::test]
+    async fn watching_stops_when_the_actor_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("colors.json");
+        let (tx, rx) = mpsc::unbounded_channel();
+        let (_, watcher) = ThemeWatcher::load(path.clone());
+        drop(rx);
+        let task = tokio::spawn(watcher.run(Duration::from_millis(10), tx));
+        std::fs::write(&path, "{}").unwrap();
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
     }
 
     async fn next_theme(rx: &mut mpsc::UnboundedReceiver<AppEvent>) -> Theme {

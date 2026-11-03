@@ -22,6 +22,7 @@ use tidings::ipc::proto::{Request, Response};
 use tidings::null_ui::NullUi;
 use tidings_core::clock::FakeClock;
 use tidings_core::ui::UiUpdate;
+use tidings_gesture::TrackpadOpener;
 use zbus::{Connection, OwnedVariant, connection};
 
 /// A throwaway `dbus-daemon` with no service activation, killed on drop.
@@ -149,6 +150,8 @@ pub fn config(bus: &PrivateBus, dir: &Path) -> DaemonConfig {
     config.colors_path = Some(dir.join("colors.json"));
     config.theme_poll = Duration::from_millis(20);
     config.settings.gestures.enabled = false;
+    // Even with gestures on, never look at the machine's real input devices.
+    config.trackpad = TrackpadOpener::new(dir.join("no-sysfs"), dir.join("no-dev-input"));
     config
 }
 
@@ -240,6 +243,28 @@ impl TestDaemon {
             d.shutdown().await;
         }
     }
+}
+
+/// The `tidings` binary, cut off from the user's session: `HOME` is `home`,
+/// every variable that would point it at real files, sockets or buses is
+/// removed, and `WAYLAND_DISPLAY` names a socket that does not exist, so the
+/// UI can never reach the live compositor.
+pub fn tidings_cmd(home: &Path) -> Command {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tidings"));
+    for var in [
+        "TIDINGS_CONFIG",
+        "TIDINGS_COLORS",
+        "TIDINGS_SOCKET",
+        "XDG_CONFIG_HOME",
+        "XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "WAYLAND_SOCKET",
+    ] {
+        cmd.env_remove(var);
+    }
+    cmd.env("HOME", home)
+        .env("WAYLAND_DISPLAY", home.join("no-such-wayland-socket"));
+    cmd
 }
 
 /// Notify with no actions/hints and default timeout.
