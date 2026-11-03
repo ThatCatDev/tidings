@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <title>tidings</title>
+  <defs>
+    <!-- The glass tile: the dusk gradient the screenshots sit on. -->
+    <linearGradient id="sky" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4a3a8c"/>
+      <stop offset="0.55" stop-color="#22708a"/>
+      <stop offset="1" stop-color="#d9764a"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.22"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="avatar" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a8c7fa"/>
+      <stop offset="1" stop-color="#6f8fe8"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="6" stdDeviation="7" flood-color="#0b0b1e" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <rect width="256" height="256" rx="58" fill="url(#sky)"/>
+  <rect width="256" height="256" rx="58" fill="url(#sheen)"/>
+
+  <!-- A stack of notifications: two sheets peeking under the newest. -->
+  <rect x="70" y="146" width="116" height="40" rx="20" fill="#ffffff" fill-opacity="0.28"/>
+  <rect x="56" y="130" width="144" height="44" rx="22" fill="#ffffff" fill-opacity="0.45"/>
+  <g filter="url(#shadow)">
+    <rect x="34" y="78" width="188" height="72" rx="36" fill="#ffffff" fill-opacity="0.94"/>
+  </g>
+  <circle cx="72" cy="114" r="22" fill="url(#avatar)"/>
+  <rect x="106" y="100" width="86" height="11" rx="5.5" fill="#1d1b2e" fill-opacity="0.78"/>
+  <rect x="106" y="119" width="60" height="9" rx="4.5" fill="#1d1b2e" fill-opacity="0.38"/>
+
+  <!-- Something new. -->
+  <circle cx="210" cy="82" r="15" fill="#ff8a5c" stroke="#ffffff" stroke-width="6"/>
+</svg>

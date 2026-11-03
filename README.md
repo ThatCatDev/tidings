@@ -1,6 +1,10 @@
-# tidings
+<p align="center">
+  <img src="docs/logo.svg" width="128" height="128" alt="">
+</p>
 
-A macOS-style Notification Centre for Hyprland, in Rust.
+<h1 align="center">tidings</h1>
+
+<p align="center">A macOS-style Notification Centre for Hyprland, in Rust.</p>
 
 ![The Notification Centre panel beside a collapsed toast, a hovered one and an expanded one, in the default glass theme](docs/screenshots/overview.png)
 
