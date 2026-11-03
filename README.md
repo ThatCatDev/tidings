@@ -26,7 +26,7 @@ One binary. No GTK, no Qt, no runtime scripting.
 
 ## Contents
 
-- [Where it runs](#where-it-runs)
+- [Supported desktops](#supported-desktops)
 - [Install](#install): from a release, or from source
 - [Set up](#set-up): replace your old notification daemon, start it with your desktop, the trackpad gesture
 - [Integrations](#integrations): Hyprland, niri, SwayFX, Noctalia, Waybar
@@ -34,22 +34,25 @@ One binary. No GTK, no Qt, no runtime scripting.
 - [Configuration](#configuration), [themes](#themes) and [colours](#colours)
 - [Updating and uninstalling](#updating-and-uninstalling)
 - [Troubleshooting](#troubleshooting)
-- [Development](#development)
+- [Contributing](#contributing)
 
-## Where it runs
+## Supported desktops
 
-tidings draws its panel and toasts as Wayland *layer surfaces* (`wlr-layer-shell`, the protocol bars and launchers use), so it needs a compositor that supports it:
+tidings draws its panel and toasts as Wayland *layer surfaces* (`wlr-layer-shell`, the protocol bars and launchers use), so it runs on desktops whose compositor supports that:
 
-| desktop | works | notes |
+| desktop | status | notes |
 |---|---|---|
-| Hyprland | yes | blur with no setup |
-| niri (26.04 and newer) | yes | blur with no setup |
-| sway, river, labwc, Wayfire | yes | no blur ([SwayFX](#swayfx) can blur) |
-| KDE Plasma, COSMIC | yes | turn off the desktop's own notifications first |
-| GNOME (Ubuntu's default desktop) | **no** | GNOME has no layer-shell and keeps its own notification service |
-| X11 sessions | **no** | Wayland only |
+| Hyprland | **tested**: used every day | blur with no setup |
+| sway | **tested**: the automated tests run on it | no blur ([SwayFX](#swayfx) can blur) |
+| niri (26.04 and newer) | should work, not tested yet | blur with no setup |
+| river, labwc, Wayfire | should work, not tested yet | no blur |
+| KDE Plasma, COSMIC | should work, not tested yet | turn off the desktop's own notifications first |
+| GNOME (Ubuntu's default desktop) | not supported | GNOME has no layer-shell and keeps its own notification service |
+| X11 sessions | not supported | Wayland only |
 
-Ubuntu itself is fine: on Ubuntu (22.04 or newer) with Kubuntu's Plasma, sway or another desktop from the table, the release build and the steps below work as they are.
+Support for more desktops will come over time. If you try tidings somewhere not marked tested, please open an issue saying how it went.
+
+On Ubuntu (22.04 or newer), tidings works with Kubuntu's Plasma, sway or another desktop from the table; the release build and the steps below work as they are.
 
 Besides the compositor you need `libxkbcommon`, a font and a D-Bus session, which every desktop has.
 
@@ -356,61 +359,16 @@ pkill -x tidings; TIDINGS_LOG=debug tidings
 ```
 
 - **"org.freedesktop.Notifications is already owned by another notification daemon"**: another daemon is running. See [Set up, step 1](#1-stop-your-old-notification-daemon).
-- **"this compositor does not support wlr-layer-shell"**: tidings can't run on this desktop (GNOME, for one). See [Where it runs](#where-it-runs).
+- **"this compositor does not support wlr-layer-shell"**: tidings can't run on this desktop (GNOME, for one). See [Supported desktops](#supported-desktops).
 - **No blur**: the compositor may not blur on request (see [Blur](#blur)); the log says `compositor blur on request: no` then. Check the theme has `blur = true`. Screenshots don't show compositor blur, so look at the screen itself.
 - **The swipe does nothing**: the log says whether a trackpad was found. Without the udev rule ([step 3](#3-the-trackpad-gesture-optional)) it can't read one.
 - **Settings don't apply**: run `tidings config check` (and `tidings theme check`), then restart tidings. Settings are read at startup; only the colours are followed live.
 - **The wrong colours**: the log's `colours:` line says where they come from; see [colours](#colours).
 - **Chrome shows Reply as a plain button**: see the Chrome note under [Using it](#using-it).
 
-## Development
+## Contributing
 
-```
-crates/core      domain model, store, policies, view building   (pure, no I/O)
-crates/gesture   evdev multitouch decoder + gesture recogniser   (pure) + device reader
-crates/ui        Wayland layer-shell UI: sctk + tiny-skia + cosmic-text
-crates/tidings   the binary: D-Bus server (zbus), app actor, IPC socket, CLI
-```
-
-- **A single actor owns all state.** D-Bus calls, gesture events, UI interactions, IPC requests and timers are messages on one channel.
-- **The UI is a passive renderer.** It receives a `ViewModel` snapshot and reports interactions back as events.
-- **I/O sits behind traits.** The clock, input device, UI handle and signal sink are all traits, so everything is testable without hardware, a compositor or the session bus.
-
-See [DESIGN.md](DESIGN.md) for the full spec.
-
-```sh
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings   # clippy::pedantic
-cargo test --workspace          # unit + integration (private dbus-daemon, never the session bus)
-                                # (the UI end-to-end tests need sway, wtype, wl-clipboard and grim;
-                                #  they run a private headless sway and skip without it)
-scripts/coverage.sh             # coverage report + the 80%-per-file gate (needs cargo-llvm-cov, jq)
-cargo run -p tidings-ui --example demo --release        # UI demo on the live compositor
-cargo run -p tidings-ui --example demo --release -- themes DIR [SCALE]   # render every theme to PNGs (the README's gallery: SCALE 1)
-cargo run -p tidings-ui --example demo --release -- states DIR  # a toast's states (collapsed, hover, expanded, replying)
-cargo run -p tidings --example web_notify     # test page for Chrome web notifications (replies, buttons) on localhost:8317
-```
-
-### Releases
-
-Every pull request gets a comment with its test coverage, compared with the branch it targets (the `coverage` workflow; it updates the same comment on each push). The check fails if any source file drops under 80% of lines covered; the aim is 85% or more everywhere.
-
-Releases are fully automatic (semantic release via [cocogitto](https://docs.cocogitto.io)). Commit messages must follow [Conventional Commits](https://www.conventionalcommits.org), and CI rejects any that don't.
-
-| commit | release |
-|---|---|
-| `fix: ...`, `perf: ...` | patch (0.1.0 → 0.1.1) |
-| `feat: ...` | minor (0.1.0 → 0.2.0) |
-| `feat!: ...` or a `BREAKING CHANGE:` footer | major |
-| `docs:`, `refactor:`, `test:`, `ci:`, `build:`, `chore:`, `style:` | no release |
-
-After CI passes on `main`, the release workflow does the rest:
-1. Bumps the workspace version in `Cargo.toml` and `Cargo.lock`.
-2. Updates `CHANGELOG.md`.
-3. Commits `chore(version): vX.Y.Z` and tags it.
-4. Publishes a GitHub release with the changelog and a `tidings-vX.Y.Z-x86_64-linux.tar.gz` binary.
-
-Locally, `cog check` validates messages and `cog bump --auto --dry-run` shows the next version.
+The design is described in [DESIGN.md](DESIGN.md); building, testing and release notes are in [CLAUDE.md](CLAUDE.md).
 
 ## License
 

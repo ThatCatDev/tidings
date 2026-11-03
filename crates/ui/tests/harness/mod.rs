@@ -6,8 +6,8 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::PoisonError;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use smithay_client_toolkit::reexports::client::globals::{GlobalListContents, registry_queue_init};
@@ -380,6 +380,82 @@ impl Pointer {
     }
 }
 
+/// The UI's log lines. The UI runs in this process, and one thing the
+/// tests must wait for (the reply field getting the keyboard) only shows
+/// there. `TIDINGS_TEST_LOG=1` also prints them.
+static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// What the UI logs once its reply field has the keyboard.
+const FOCUSED: &str = "reply field has the keyboard";
+
+struct Capture;
+
+impl log::Log for Capture {
+    fn enabled(&self, meta: &log::Metadata<'_>) -> bool {
+        meta.target().starts_with("tidings_ui")
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        if self.enabled(record.metadata()) {
+            let line = record.args().to_string();
+            if std::env::var_os("TIDINGS_TEST_LOG").is_some() {
+                eprintln!("{line}");
+            }
+            LOG.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(line);
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+fn capture_log() {
+    static CAPTURE: Capture = Capture;
+    if log::set_logger(&CAPTURE).is_ok() {
+        log::set_max_level(log::LevelFilter::Trace);
+    }
+}
+
+/// How many log lines contain `needle` so far.
+fn logged(needle: &str) -> usize {
+    LOG.lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .filter(|l| l.contains(needle))
+        .count()
+}
+
+/// Clicks on these open the reply field, which then needs the keyboard.
+fn takes_keyboard(target: &HitTarget) -> bool {
+    matches!(target, HitTarget::StartReply(_) | HitTarget::ReplyField(_))
+}
+
+/// Waits until the reply field has had the keyboard more than `before` times.
+#[track_caller]
+fn wait_for_keyboard(before: usize) {
+    wait_logged(FOCUSED, before, true);
+}
+
+/// What the UI logs each time it draws a surface (and sets where it can
+/// be clicked).
+const PANEL_DRAWN: &str = "input region of Panel";
+const TOASTS_DRAWN: &str = "input region of Toasts";
+
+/// Waits until `needle` has been logged more than `before` times. A miss
+/// fails the test if `required`; otherwise the wait just ends.
+#[track_caller]
+fn wait_logged(needle: &str, before: usize, required: bool) {
+    let deadline = Instant::now() + PATIENCE;
+    while logged(needle) <= before {
+        if Instant::now() >= deadline {
+            assert!(!required, "never logged: {needle}");
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 /// The UI running on a [`Compositor`], with a pointer to drive it.
 pub struct Session<'a> {
     sway: &'a Compositor,
@@ -410,7 +486,7 @@ impl<'a> Session<'a> {
     }
 
     fn with_animation(sway: &'a Compositor, animation: AnimationConfig) -> Self {
-        let _ = env_logger::builder().is_test(true).try_init();
+        capture_log();
         let (tx, events) = channel();
         let ui = spawn_on(
             &Display::Socket(sway.socket().to_owned()),
@@ -435,9 +511,34 @@ impl<'a> Session<'a> {
         std::thread::sleep(Duration::from_millis(450));
     }
 
+    /// Shows `view`, waiting for the toasts (if any) to be drawn.
     pub fn view(&self, view: ViewModel) {
+        let before = logged(TOASTS_DRAWN);
+        let toasts = !view.toasts.is_empty();
         self.ui.send(UiUpdate::View(Box::new(view)));
+        if toasts {
+            // Not fatal: with the panel open there are no toasts to draw.
+            wait_logged(TOASTS_DRAWN, before, false);
+        }
         self.settle();
+    }
+
+    /// Opens the panel and waits until it is drawn (and so clickable).
+    #[track_caller]
+    pub fn open_panel(&self) {
+        let before = logged(PANEL_DRAWN);
+        self.ui.send(UiUpdate::Panel(PanelCommand::AnimateTo(1.0)));
+        self.expect(|e| *e == UiEvent::PanelSettled { open: true });
+        wait_logged(PANEL_DRAWN, before, true);
+    }
+
+    /// Closes the panel and waits for the toasts, if any, to come back.
+    #[track_caller]
+    pub fn close_panel(&self) {
+        let before = logged(TOASTS_DRAWN);
+        self.ui.send(UiUpdate::Panel(PanelCommand::AnimateTo(0.0)));
+        self.expect(|e| *e == UiEvent::PanelSettled { open: false });
+        wait_logged(TOASTS_DRAWN, before, false);
     }
 
     /// Waits for an event matching `want`. Events it passes over are kept
@@ -504,9 +605,13 @@ impl<'a> Session<'a> {
         target: &HitTarget,
     ) {
         let p = self.toast_point(t, draft, target);
+        let before = logged(FOCUSED);
         self.pointer.move_to(f64::from(p.x), f64::from(p.y));
         self.pointer.click();
         self.caught_up();
+        if takes_keyboard(target) {
+            wait_for_keyboard(before);
+        }
     }
 
     /// Waits until the UI has handled everything sent to it so far. Closing
@@ -573,13 +678,16 @@ impl<'a> Session<'a> {
         target: &HitTarget,
     ) {
         let p = self.panel_point(view, draft, target);
+        let before = logged(FOCUSED);
         self.pointer.move_to(f64::from(p.x), f64::from(p.y));
         self.pointer.click();
+        if takes_keyboard(target) {
+            wait_for_keyboard(before);
+        }
     }
 
     pub fn click_panel(&mut self, view: &ViewModel, target: &HitTarget) {
-        self.hover_panel(view, target);
-        self.pointer.click();
+        self.click_panel_with(view, None, target);
     }
 
     fn wtype(&self, args: &[&str]) {

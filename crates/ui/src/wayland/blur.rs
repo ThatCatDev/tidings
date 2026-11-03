@@ -27,9 +27,10 @@ pub struct Glass {
 }
 
 /// Whole-pixel rectangles `(x, y, w, h)` covering `glass`: a band through
-/// the middle and, near the top and bottom, one row per pixel inset to follow
-/// the corner's curve (rows with the same inset merged). A Wayland region is
-/// made of rectangles, so this is how it gets round corners.
+/// the middle and, near the top and bottom, one row per pixel inset (to the
+/// nearest pixel) to follow the corner's curve, rows with the same inset
+/// merged. A Wayland region is made of rectangles, so this is how it gets
+/// round corners.
 #[must_use]
 #[allow(
     clippy::many_single_char_names,
@@ -51,7 +52,7 @@ pub fn region_rects(glass: &[Glass]) -> Vec<(i32, i32, i32, i32)> {
             .map(|row| {
                 let rf = crate::geom::i32_to_f32(r);
                 let dy = rf - crate::geom::i32_to_f32(row) - 0.5;
-                f32_to_i32((rf - (rf * rf - dy * dy).max(0.0).sqrt()).ceil())
+                f32_to_i32((rf - (rf * rf - dy * dy).max(0.0).sqrt()).round())
             })
             .collect();
         let mut row = 0;
